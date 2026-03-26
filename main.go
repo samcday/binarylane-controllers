@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"log/slog"
 	"net"
@@ -13,6 +15,7 @@ import (
 	"github.com/samcday/binarylane-controller/nodecontroller"
 	pb "github.com/samcday/binarylane-controller/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -99,7 +102,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	srv := grpc.NewServer()
+	var grpcOpts []grpc.ServerOption
+
+	tlsCertPath := os.Getenv("TLS_CERT_PATH")
+	tlsKeyPath := os.Getenv("TLS_KEY_PATH")
+	tlsCAPath := os.Getenv("TLS_CA_PATH")
+	if tlsCertPath != "" && tlsKeyPath != "" && tlsCAPath != "" {
+		tlsCreds, err := loadMTLSCredentials(tlsCertPath, tlsKeyPath, tlsCAPath)
+		if err != nil {
+			slog.Error("loading mTLS credentials", "error", err)
+			os.Exit(1)
+		}
+		grpcOpts = append(grpcOpts, grpc.Creds(tlsCreds))
+		slog.Info("mTLS enabled for gRPC server")
+	}
+
+	srv := grpc.NewServer(grpcOpts...)
 	pb.RegisterCloudProviderServer(srv, provider)
 
 	slog.Info("binarylane-controller starting", "grpc", listenAddr, "nodeGroups", len(cfg.NodeGroups))
@@ -114,4 +132,26 @@ func buildKubeConfig() (*rest.Config, error) {
 		return clientcmd.BuildConfigFromFlags("", kubeconfig)
 	}
 	return rest.InClusterConfig()
+}
+
+func loadMTLSCredentials(certPath, keyPath, caPath string) (credentials.TransportCredentials, error) {
+	serverCert, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		return nil, err
+	}
+	caPEM, err := os.ReadFile(caPath)
+	if err != nil {
+		return nil, err
+	}
+	caPool := x509.NewCertPool()
+	if !caPool.AppendCertsFromPEM(caPEM) {
+		return nil, err
+	}
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{serverCert},
+		ClientCAs:    caPool,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		MinVersion:   tls.VersionTLS13,
+	}
+	return credentials.NewTLS(tlsConfig), nil
 }

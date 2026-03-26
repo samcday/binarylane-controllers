@@ -31,6 +31,11 @@ autoscaler:
 # Template variables passed as TMPL_* env vars
 templateVars: {}
 
+mtls:
+  enabled: true
+  # Name of the Secret created with client credentials for cluster-autoscaler
+  clientSecretName: binarylane-controller-mtls-client
+
 grpcService:
   type: ClusterIP
   port: 8086

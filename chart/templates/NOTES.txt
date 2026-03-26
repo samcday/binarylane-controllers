@@ -11,4 +11,14 @@ Configure cluster-autoscaler to use this endpoint:
   --cloud-provider=externalgrpc
   --cloud-config=<path-to-config>
   env EXTERNALGRPC_URL={{ include "binarylane-controller.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.grpcService.port }}
+
+{{- if .Values.mtls.enabled }}
+mTLS is enabled. Client credentials for cluster-autoscaler are in Secret:
+  {{ .Values.mtls.clientSecretName }}
+
+Mount this Secret into your cluster-autoscaler pod and configure:
+  --cloud-provider-grpc-tls-ca=/path/to/ca.crt
+  --cloud-provider-grpc-tls-cert=/path/to/tls.crt
+  --cloud-provider-grpc-tls-key=/path/to/tls.key
+{{- end }}
 {{- end }}

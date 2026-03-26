@@ -46,6 +46,14 @@ spec:
             - name: GRPC_LISTEN_ADDR
               value: {{ .Values.autoscaler.listenAddr | quote }}
             {{- end }}
+            {{- if and .Values.autoscaler.enabled .Values.mtls.enabled }}
+            - name: TLS_CERT_PATH
+              value: /etc/binarylane-controller/tls/tls.crt
+            - name: TLS_KEY_PATH
+              value: /etc/binarylane-controller/tls/tls.key
+            - name: TLS_CA_PATH
+              value: /etc/binarylane-controller/tls/ca.crt
+            {{- end }}
             {{- range $key, $value := .Values.templateVars }}
             - name: TMPL_{{ $key }}
               value: {{ $value | quote }}
@@ -61,6 +69,11 @@ spec:
             - name: config
               mountPath: /etc/binarylane-controller
               readOnly: true
+            {{- if .Values.mtls.enabled }}
+            - name: tls
+              mountPath: /etc/binarylane-controller/tls
+              readOnly: true
+            {{- end }}
           {{- end }}
           {{- with .Values.resources }}
           resources:
@@ -71,6 +84,11 @@ spec:
         - name: config
           configMap:
             name: {{ include "binarylane-controller.fullname" . }}
+        {{- if .Values.mtls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ include "binarylane-controller.fullname" . }}-mtls-server
+        {{- end }}
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

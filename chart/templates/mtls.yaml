@@ -1,0 +1,36 @@
+{{- if and .Values.autoscaler.enabled .Values.mtls.enabled }}
+{{- $fullname := include "binarylane-controller.fullname" . -}}
+{{- $svcName := printf "%s.%s.svc" $fullname .Release.Namespace -}}
+{{- $svcCluster := printf "%s.%s.svc.cluster.local" $fullname .Release.Namespace -}}
+{{- $ca := genCA "binarylane-controller-ca" 3650 -}}
+{{- $serverCert := genSignedCert $fullname nil (list $svcName $svcCluster "localhost") 3650 $ca -}}
+{{- $clientCert := genSignedCert "cluster-autoscaler" nil nil 3650 $ca -}}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $fullname }}-mtls-server
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "binarylane-controller.labels" . | nindent 4 }}
+type: Opaque
+data:
+  ca.crt: {{ $ca.Cert | b64enc }}
+  tls.crt: {{ $serverCert.Cert | b64enc }}
+  tls.key: {{ $serverCert.Key | b64enc }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.mtls.clientSecretName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "binarylane-controller.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+type: Opaque
+data:
+  ca.crt: {{ $ca.Cert | b64enc }}
+  tls.crt: {{ $clientCert.Cert | b64enc }}
+  tls.key: {{ $clientCert.Key | b64enc }}
+{{- end }}
