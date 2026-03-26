@@ -1,0 +1,50 @@
+image:
+  repository: ghcr.io/samcday/binarylane-controller
+  tag: ""  # defaults to appVersion
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# BinaryLane API token - required
+# Can be provided directly or via an existing secret
+apiToken: ""
+existingSecret: ""
+existingSecretKey: "BL_API_TOKEN"
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# Autoscaler gRPC provider configuration
+autoscaler:
+  enabled: true
+  # Node group configuration (JSON)
+  config: {}
+  # Cloud-init template
+  cloudInit: ""
+  # gRPC listen address
+  listenAddr: ":8086"
+
+# Template variables passed as TMPL_* env vars
+templateVars: {}
+
+grpcService:
+  type: ClusterIP
+  port: 8086
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 128Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podAnnotations: {}
+podLabels: {}

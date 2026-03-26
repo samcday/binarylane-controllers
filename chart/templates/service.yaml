@@ -1,0 +1,18 @@
+{{- if .Values.autoscaler.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "binarylane-controller.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "binarylane-controller.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.grpcService.type }}
+  ports:
+    - port: {{ .Values.grpcService.port }}
+      targetPort: grpc
+      protocol: TCP
+      name: grpc
+  selector:
+    {{- include "binarylane-controller.selectorLabels" . | nindent 4 }}
+{{- end }}

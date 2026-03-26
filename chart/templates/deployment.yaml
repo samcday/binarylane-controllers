@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "binarylane-controller.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "binarylane-controller.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "binarylane-controller.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "binarylane-controller.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "binarylane-controller.serviceAccountName" . }}
+      containers:
+        - name: controller
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: BL_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "binarylane-controller.secretName" . }}
+                  key: {{ .Values.existingSecretKey }}
+            {{- if .Values.autoscaler.enabled }}
+            - name: CONFIG_PATH
+              value: /etc/binarylane-controller/config.json
+            - name: CLOUD_INIT_PATH
+              value: /etc/binarylane-controller/cloud-init.sh
+            - name: GRPC_LISTEN_ADDR
+              value: {{ .Values.autoscaler.listenAddr | quote }}
+            {{- end }}
+            {{- range $key, $value := .Values.templateVars }}
+            - name: TMPL_{{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          {{- if .Values.autoscaler.enabled }}
+          ports:
+            - name: grpc
+              containerPort: 8086
+              protocol: TCP
+          {{- end }}
+          {{- if .Values.autoscaler.enabled }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/binarylane-controller
+              readOnly: true
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- if .Values.autoscaler.enabled }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "binarylane-controller.fullname" . }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

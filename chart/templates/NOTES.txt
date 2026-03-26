@@ -1,0 +1,14 @@
+binarylane-controller has been deployed.
+
+Node controller is running and will reconcile K8s nodes with BinaryLane servers every 30s.
+
+{{- if .Values.autoscaler.enabled }}
+
+Autoscaler gRPC provider is enabled.
+Service: {{ include "binarylane-controller.fullname" . }}:{{ .Values.grpcService.port }}
+
+Configure cluster-autoscaler to use this endpoint:
+  --cloud-provider=externalgrpc
+  --cloud-config=<path-to-config>
+  env EXTERNALGRPC_URL={{ include "binarylane-controller.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.grpcService.port }}
+{{- end }}
