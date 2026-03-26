@@ -14,6 +14,7 @@ import (
 	"github.com/samcday/binarylane-controller/binarylane"
 	"github.com/samcday/binarylane-controller/nodecontroller"
 	pb "github.com/samcday/binarylane-controller/proto"
+	"github.com/samcday/binarylane-controller/servicecontroller"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"k8s.io/client-go/kubernetes"
@@ -46,6 +47,9 @@ func main() {
 	}
 	nc := nodecontroller.New(bl, k8sClient)
 	go nc.Run(ctx)
+
+	sc := servicecontroller.New(bl, k8sClient)
+	go sc.Run(ctx)
 
 	// Start autoscaler gRPC provider if config is available
 	configPath := os.Getenv("CONFIG_PATH")
