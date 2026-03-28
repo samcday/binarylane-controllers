@@ -1,9 +1,20 @@
 FROM rust:1-alpine AS build
 RUN apk add --no-cache build-base cmake musl-dev protobuf-dev
+
 WORKDIR /src
+
+# Copy manifests, build script, and proto definitions first for layer caching
 COPY Cargo.toml Cargo.lock build.rs ./
-COPY xtask/ xtask/
+COPY xtask/Cargo.toml xtask/Cargo.toml
 COPY proto/ proto/
+
+# Create dummy sources so cargo can fetch + compile all dependencies
+RUN mkdir src && echo "fn main() {}" > src/main.rs && \
+    mkdir xtask/src && echo "fn main() {}" > xtask/src/main.rs && \
+    cargo build --release -p binarylane-controller 2>&1 && \
+    rm -rf src xtask/src target/release/.fingerprint/binarylane-controller-*
+
+# Now copy real sources — only our crate recompiles
 COPY src/ src/
 RUN cargo build --release -p binarylane-controller
 
