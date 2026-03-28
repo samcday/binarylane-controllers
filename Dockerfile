@@ -15,6 +15,8 @@ RUN mkdir src && echo "fn main() {}" > src/main.rs && \
     rm -rf src xtask/src target/release/.fingerprint/binarylane-controller-*
 
 # Now copy real sources — only our crate recompiles
+# Recreate xtask dummy (not built, but workspace needs valid member)
+RUN mkdir xtask/src && echo "fn main() {}" > xtask/src/main.rs
 COPY src/ src/
 RUN cargo build --release -p binarylane-controller
 
