@@ -37,13 +37,18 @@ docker run -e BL_API_TOKEN=<your-token> binarylane-controller
 Use xtask to provision/reuse a BinaryLane k3s control-plane VM and emit sourceable env vars:
 
 ```bash
-eval "$(cargo xtask dev-up)"
+eval "$(BL_API_TOKEN=<your-token> cargo xtask dev-up)"
 ```
 
-`dev-up` writes local state to `.dev/dev-state.json` and kubeconfig to `.dev/kubeconfig`, logs progress to stderr, and prints shell assignments to stdout (including `KUBECONFIG`, `BL_DEV_*`, and `TMPL_*` values).
+`dev-up` writes local state to `.dev/dev-state.json` and kubeconfig to `.dev/kubeconfig`, logs progress to stderr, and prints `export KEY='value'` shell assignments to stdout (including `KUBECONFIG`, `DOCKER_CONFIG`, `BL_DEV_*`, and `TMPL_*` values).
+
+It also provisions an authenticated public registry endpoint on the dev control-plane host, backed by `hostPath` storage, and writes Docker auth to `.dev/docker/config.json` so local `docker`/Tilt pushes can work immediately via exported `DOCKER_CONFIG`.
+
+`Tiltfile` consumes `BL_DEV_CONTROLLER_IMAGE` and `BL_DEV_REGISTRY_PULL_SECRET` from this environment automatically.
+`BL_API_TOKEN` is also exported so `tilt up` and `cargo xtask dev-down` work without extra setup.
 
 Tear down all tracked dev resources and local state:
 
 ```bash
-cargo xtask dev-down
+BL_API_TOKEN=<your-token> cargo xtask dev-down
 ```

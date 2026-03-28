@@ -5,7 +5,10 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1"
+bcrypt = "0.16"
+base64 = "0.22"
 clap = { version = "4", features = ["derive", "env"] }
+rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

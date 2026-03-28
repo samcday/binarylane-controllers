@@ -1,5 +1,5 @@
 # Override values for Tilt development.
-# Set your BL_API_TOKEN here or use existingSecret.
+# BL_API_TOKEN is set from environment in Tiltfile.
 apiToken: "dev-token-replace-me"
 
 autoscaler:

@@ -6,7 +6,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use base64::Engine;
+use bcrypt::{DEFAULT_COST, hash};
 use clap::{Args, Parser, Subcommand};
+use rand::distributions::Alphanumeric;
+use rand::{Rng, thread_rng};
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_API_BASE: &str = "https://api.binarylane.com.au/v2";
@@ -14,6 +18,13 @@ const DEFAULT_API_BASE: &str = "https://api.binarylane.com.au/v2";
 const DEFAULT_STATE_FILE: &str = ".dev/dev-state.json";
 const DEFAULT_KUBECONFIG_OUT: &str = ".dev/kubeconfig";
 const DEFAULT_KNOWN_HOSTS: &str = ".dev/known_hosts";
+const DEFAULT_DOCKER_CONFIG_DIR: &str = ".dev/docker";
+const DEFAULT_REGISTRY_USERNAME: &str = "dev";
+const DEFAULT_REGISTRY_SECRET_NAME: &str = "dev-registry-cred";
+const REGISTRY_NAMESPACE: &str = "binarylane-dev-registry";
+const REGISTRY_DATA_HOSTPATH: &str = "/var/lib/binarylane-dev-registry/registry-data";
+const REGISTRY_TLS_DATA_HOSTPATH: &str = "/var/lib/binarylane-dev-registry/caddy-data";
+const REGISTRY_TLS_CONFIG_HOSTPATH: &str = "/var/lib/binarylane-dev-registry/caddy-config";
 
 const DEFAULT_REGION: &str = "syd";
 const DEFAULT_SIZE: &str = "std-1vcpu";
@@ -54,6 +65,10 @@ struct DevUpArgs {
     #[arg(long, default_value = DEFAULT_KNOWN_HOSTS)]
     known_hosts: PathBuf,
 
+    /// Local Docker config directory containing registry auth
+    #[arg(long, default_value = DEFAULT_DOCKER_CONFIG_DIR)]
+    docker_config_dir: PathBuf,
+
     /// Server name to create/reuse
     #[arg(long, default_value_t = default_server_name())]
     server_name: String,
@@ -86,6 +101,18 @@ struct DevUpArgs {
     #[arg(long, env = "BL_DEV_SSH_KEY_NAME", default_value_t = default_ssh_key_name())]
     ssh_key_name: String,
 
+    /// Username for the dev registry auth
+    #[arg(long, env = "BL_DEV_REGISTRY_USERNAME", default_value = DEFAULT_REGISTRY_USERNAME)]
+    registry_username: String,
+
+    /// Kubernetes Secret name used for image pull auth
+    #[arg(
+        long,
+        env = "BL_DEV_REGISTRY_SECRET_NAME",
+        default_value = DEFAULT_REGISTRY_SECRET_NAME
+    )]
+    registry_secret_name: String,
+
     /// Timeout used for server/SSH/k3s readiness
     #[arg(long, env = "BL_DEV_WAIT_TIMEOUT_SECS", default_value_t = 900)]
     wait_timeout_secs: u64,
@@ -108,6 +135,10 @@ struct DevDownArgs {
     /// known_hosts path to delete
     #[arg(long, default_value = DEFAULT_KNOWN_HOSTS)]
     known_hosts: PathBuf,
+
+    /// Local Docker config directory to delete
+    #[arg(long, default_value = DEFAULT_DOCKER_CONFIG_DIR)]
+    docker_config_dir: PathBuf,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -124,6 +155,12 @@ struct DevState {
     ssh_key_id: Option<i64>,
     ssh_key_fingerprint: Option<String>,
     ssh_key_name: String,
+    registry_host: Option<String>,
+    registry_username: String,
+    registry_password: Option<String>,
+    registry_pull_secret_name: String,
+    docker_config_dir: Option<String>,
+    registry_image_repo: Option<String>,
     kubeconfig_path: Option<String>,
     known_hosts_path: Option<String>,
     k3s_url: Option<String>,
@@ -141,6 +178,7 @@ struct Server {
     id: i64,
     name: String,
     status: String,
+    permalink: Option<String>,
     networks: Networks,
 }
 
@@ -198,9 +236,12 @@ fn cmd_dev_up(args: DevUpArgs) -> Result<()> {
     ensure_parent_dir(&args.kubeconfig_out)?;
     ensure_parent_dir(&args.known_hosts)?;
     ensure_parent_dir(&args.ssh_key_path)?;
+    ensure_dir(&args.docker_config_dir)?;
 
     let timeout = Duration::from_secs(args.wait_timeout_secs);
     let ssh_key_path = absolute_path(&args.ssh_key_path)?;
+    let docker_config_dir = absolute_path(&args.docker_config_dir)?;
+    ensure_dir(&docker_config_dir)?;
     ensure_managed_ssh_keypair(&ssh_key_path)?;
     let ssh_public_key = read_managed_public_key(&ssh_key_path)?;
 
@@ -254,6 +295,32 @@ fn cmd_dev_up(args: DevUpArgs) -> Result<()> {
     let server_ip = server
         .public_ipv4()
         .ok_or_else(|| anyhow::anyhow!("server {} has no public IPv4", server.id))?;
+    let registry_host = server.registry_host().ok_or_else(|| {
+        anyhow::anyhow!(
+            "server {} has no permalink hostname for public dev registry",
+            server.id
+        )
+    })?;
+
+    let registry_username = if state.registry_username.trim().is_empty() {
+        args.registry_username.clone()
+    } else {
+        state.registry_username.clone()
+    };
+    let registry_password = state
+        .registry_password
+        .clone()
+        .unwrap_or_else(generate_registry_password);
+    let registry_password_bcrypt = hash(&registry_password, DEFAULT_COST)
+        .context("hashing registry password for basic auth")?;
+
+    state.registry_host = Some(registry_host.clone());
+    state.registry_username = registry_username.clone();
+    state.registry_password = Some(registry_password.clone());
+    state.registry_pull_secret_name = args.registry_secret_name.clone();
+    state.docker_config_dir = Some(path_to_string(&docker_config_dir)?);
+    state.registry_image_repo = Some(format!("{}/binarylane-controller", registry_host));
+    save_state(&args.state_file, &state)?;
 
     let mut ssh_users = vec![args.ssh_user.clone()];
     for fallback in ["root", "ubuntu", "debian"] {
@@ -275,6 +342,25 @@ fn cmd_dev_up(args: DevUpArgs) -> Result<()> {
         &ssh_user,
         Some(&ssh_key_path),
         &args.known_hosts,
+        timeout,
+    )?;
+
+    ensure_dev_registry(
+        &server_ip,
+        &ssh_user,
+        Some(&ssh_key_path),
+        &args.known_hosts,
+        &registry_host,
+        &registry_username,
+        &registry_password,
+        &registry_password_bcrypt,
+        &args.registry_secret_name,
+        timeout,
+    )?;
+    wait_for_registry_https(
+        &registry_host,
+        &registry_username,
+        &registry_password,
         timeout,
     )?;
 
@@ -304,6 +390,7 @@ fn cmd_dev_up(args: DevUpArgs) -> Result<()> {
 
     let k3s_url = format!("https://{}:6443", server_ip);
     let kubeconfig = rewrite_kubeconfig_server(&raw_kubeconfig, &k3s_url);
+    let registry_image_repo = format!("{}/binarylane-controller", registry_host);
 
     fs::write(&args.kubeconfig_out, kubeconfig).with_context(|| {
         format!(
@@ -311,6 +398,12 @@ fn cmd_dev_up(args: DevUpArgs) -> Result<()> {
             args.kubeconfig_out.display()
         )
     })?;
+    write_docker_config(
+        &docker_config_dir,
+        &registry_host,
+        &registry_username,
+        &registry_password,
+    )?;
 
     state.server_id = Some(server.id);
     state.server_name = server.name.clone();
@@ -323,6 +416,12 @@ fn cmd_dev_up(args: DevUpArgs) -> Result<()> {
     state.ssh_key_id = Some(account_key.id);
     state.ssh_key_fingerprint = Some(account_key.fingerprint.clone());
     state.ssh_key_name = account_key.name.clone();
+    state.registry_host = Some(registry_host.clone());
+    state.registry_username = registry_username.clone();
+    state.registry_password = Some(registry_password.clone());
+    state.registry_pull_secret_name = args.registry_secret_name.clone();
+    state.docker_config_dir = Some(path_to_string(&docker_config_dir)?);
+    state.registry_image_repo = Some(registry_image_repo.clone());
     state.kubeconfig_path = Some(path_to_string(&absolute_path(&args.kubeconfig_out)?)?);
     state.known_hosts_path = Some(path_to_string(&absolute_path(&args.known_hosts)?)?);
     state.k3s_url = Some(k3s_url.clone());
@@ -338,6 +437,7 @@ fn cmd_dev_up(args: DevUpArgs) -> Result<()> {
         &path_to_string(&absolute_path(&args.state_file)?)?,
     );
     emit_env("BL_API_TOKEN", &args.bl_api_token);
+    emit_env("DOCKER_CONFIG", &path_to_string(&docker_config_dir)?);
     emit_env("BL_DEV_SERVER_ID", &server.id.to_string());
     emit_env("BL_DEV_SERVER_NAME", &server.name);
     emit_env("BL_DEV_SERVER_IP", &server_ip);
@@ -346,6 +446,11 @@ fn cmd_dev_up(args: DevUpArgs) -> Result<()> {
     emit_env("BL_DEV_SSH_KEY_NAME", &account_key.name);
     emit_env("BL_DEV_SSH_KEY_ID", &account_key.id.to_string());
     emit_env("BL_DEV_SSH_KEY_FINGERPRINT", &account_key.fingerprint);
+    emit_env("BL_DEV_REGISTRY", &registry_host);
+    emit_env("BL_DEV_REGISTRY_USERNAME", &registry_username);
+    emit_env("BL_DEV_REGISTRY_PASSWORD", &registry_password);
+    emit_env("BL_DEV_REGISTRY_PULL_SECRET", &args.registry_secret_name);
+    emit_env("BL_DEV_CONTROLLER_IMAGE", &registry_image_repo);
     emit_env("BL_DEV_K3S_URL", &k3s_url);
     emit_env("BL_DEV_K3S_TOKEN", &k3s_token);
     emit_env("TMPL_K3S_URL", &k3s_url);
@@ -405,6 +510,10 @@ fn cmd_dev_down(args: DevDownArgs) -> Result<()> {
         remove_file_if_exists(private_path)?;
         let public_path = managed_public_key_path(private_path);
         remove_file_if_exists(&public_path)?;
+    }
+    remove_dir_if_exists(&args.docker_config_dir)?;
+    if let Some(path) = &state.docker_config_dir {
+        remove_dir_if_exists(Path::new(path))?;
     }
 
     remove_file_if_exists(&args.state_file)?;
@@ -571,6 +680,254 @@ ${{SUDO}} systemctl is-active --quiet k3s\n"
                 thread::sleep(Duration::from_secs(8));
             }
         }
+    }
+}
+
+fn ensure_dev_registry(
+    host: &str,
+    user: &str,
+    ssh_key_path: Option<&Path>,
+    known_hosts: &Path,
+    registry_host: &str,
+    registry_username: &str,
+    registry_password: &str,
+    registry_password_bcrypt: &str,
+    registry_secret_name: &str,
+    timeout: Duration,
+) -> Result<()> {
+    eprintln!(
+        "Deploying authenticated dev registry at https://{}...",
+        registry_host
+    );
+
+    let manifest = format!(
+        r#"apiVersion: v1
+kind: Namespace
+metadata:
+  name: {ns}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: registry
+  namespace: {ns}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: registry
+  template:
+    metadata:
+      labels:
+        app: registry
+    spec:
+      containers:
+        - name: registry
+          image: registry:2
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5000
+              name: http
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/registry
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+      volumes:
+        - name: data
+          hostPath:
+            path: {registry_data_hostpath}
+            type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: registry
+  namespace: {ns}
+spec:
+  selector:
+    app: registry
+  ports:
+    - name: http
+      port: 5000
+      targetPort: 5000
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: registry-gateway-caddyfile
+  namespace: {ns}
+data:
+  Caddyfile: |
+    https://{registry_host} {{
+      basic_auth {{
+        {registry_username} {registry_password_bcrypt}
+      }}
+      reverse_proxy registry.{ns}.svc.cluster.local:5000
+    }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: registry-gateway
+  namespace: {ns}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: registry-gateway
+  template:
+    metadata:
+      labels:
+        app: registry-gateway
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: caddy
+          image: caddy:2.9-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+              name: http
+            - containerPort: 443
+              name: https
+          volumeMounts:
+            - name: caddyfile
+              mountPath: /etc/caddy/Caddyfile
+              subPath: Caddyfile
+            - name: caddy-data
+              mountPath: /data
+            - name: caddy-config
+              mountPath: /config
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+      volumes:
+        - name: caddyfile
+          configMap:
+            name: registry-gateway-caddyfile
+        - name: caddy-data
+          hostPath:
+            path: {registry_tls_data_hostpath}
+            type: DirectoryOrCreate
+        - name: caddy-config
+          hostPath:
+            path: {registry_tls_config_hostpath}
+            type: DirectoryOrCreate
+"#,
+        ns = REGISTRY_NAMESPACE,
+        registry_data_hostpath = REGISTRY_DATA_HOSTPATH,
+        registry_tls_data_hostpath = REGISTRY_TLS_DATA_HOSTPATH,
+        registry_tls_config_hostpath = REGISTRY_TLS_CONFIG_HOSTPATH,
+        registry_host = registry_host,
+        registry_username = registry_username,
+        registry_password_bcrypt = registry_password_bcrypt,
+    );
+
+    let default_sa_patch = format!(
+        r#"{{"imagePullSecrets":[{{"name":"{}"}}]}}"#,
+        registry_secret_name
+    );
+
+    let script = format!(
+        r#"set -eu
+if [ "$(id -u)" -eq 0 ]; then
+  SUDO=""
+else
+  SUDO="sudo"
+fi
+cat <<'EOF_MANIFEST' | ${{SUDO}} kubectl apply -f -
+{manifest}
+EOF_MANIFEST
+for ns in {registry_ns} default binarylane-system; do
+  ${{SUDO}} kubectl get namespace "$ns" >/dev/null 2>&1 || ${{SUDO}} kubectl create namespace "$ns"
+  ${{SUDO}} kubectl -n "$ns" create secret docker-registry {registry_secret_name} \
+    --docker-server={registry_host} \
+    --docker-username={registry_username} \
+    --docker-password={registry_password} \
+    --dry-run=client -o yaml | ${{SUDO}} kubectl apply -f -
+done
+for ns in default; do
+  ${{SUDO}} kubectl -n "$ns" patch serviceaccount default --type='merge' -p={default_sa_patch} >/dev/null
+done
+${{SUDO}} kubectl -n {registry_ns} rollout status deployment/registry --timeout=300s
+${{SUDO}} kubectl -n {registry_ns} rollout status deployment/registry-gateway --timeout=300s
+"#,
+        manifest = manifest,
+        registry_ns = REGISTRY_NAMESPACE,
+        registry_secret_name = shell_single_quote(registry_secret_name),
+        registry_host = shell_single_quote(registry_host),
+        registry_username = shell_single_quote(registry_username),
+        registry_password = shell_single_quote(registry_password),
+        default_sa_patch = shell_single_quote(&default_sa_patch),
+    );
+
+    let start = Instant::now();
+    loop {
+        match run_ssh_script(
+            host,
+            user,
+            ssh_key_path,
+            known_hosts,
+            &script,
+            SshOutputMode::Stderr,
+        ) {
+            Ok(_) => {
+                eprintln!("Dev registry is configured");
+                return Ok(());
+            }
+            Err(err) => {
+                if start.elapsed() > timeout {
+                    return Err(err).context("timed out deploying dev registry");
+                }
+                eprintln!("dev registry not ready yet: {err}");
+                thread::sleep(Duration::from_secs(10));
+            }
+        }
+    }
+}
+
+fn wait_for_registry_https(
+    registry_host: &str,
+    registry_username: &str,
+    registry_password: &str,
+    timeout: Duration,
+) -> Result<()> {
+    eprintln!(
+        "Waiting for registry endpoint https://{}/v2/ ...",
+        registry_host
+    );
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .context("building HTTP client for registry probe")?;
+
+    let start = Instant::now();
+    loop {
+        let resp = client
+            .get(format!("https://{registry_host}/v2/"))
+            .basic_auth(registry_username, Some(registry_password))
+            .send();
+
+        if let Ok(resp) = resp {
+            if resp.status().is_success() {
+                eprintln!("Registry endpoint is reachable");
+                return Ok(());
+            }
+            eprintln!("Registry probe returned status {}", resp.status());
+        }
+
+        if start.elapsed() > timeout {
+            bail!(
+                "timed out waiting for registry endpoint https://{}/v2/",
+                registry_host
+            );
+        }
+
+        thread::sleep(Duration::from_secs(5));
     }
 }
 
@@ -878,6 +1235,17 @@ fn remove_file_if_exists(path: &Path) -> Result<()> {
     }
 }
 
+fn remove_dir_if_exists(path: &Path) -> Result<()> {
+    match fs::remove_dir_all(path) {
+        Ok(_) => {
+            eprintln!("Removed {}", path.display());
+            Ok(())
+        }
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err).with_context(|| format!("removing {}", path.display())),
+    }
+}
+
 fn absolute_path(path: &Path) -> Result<PathBuf> {
     if path.is_absolute() {
         return Ok(path.to_path_buf());
@@ -900,6 +1268,10 @@ fn ensure_parent_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn ensure_dir(path: &Path) -> Result<()> {
+    fs::create_dir_all(path).with_context(|| format!("creating directory {}", path.display()))
+}
+
 fn ensure_tool(name: &str, install_hint: &str) -> Result<()> {
     let found = Command::new("which")
         .arg(name)
@@ -910,6 +1282,45 @@ fn ensure_tool(name: &str, install_hint: &str) -> Result<()> {
         bail!("'{name}' not found in PATH ({install_hint})");
     }
     Ok(())
+}
+
+fn write_docker_config(
+    docker_config_dir: &Path,
+    registry_host: &str,
+    registry_username: &str,
+    registry_password: &str,
+) -> Result<()> {
+    ensure_dir(docker_config_dir)?;
+    let auth = base64::engine::general_purpose::STANDARD
+        .encode(format!("{registry_username}:{registry_password}"));
+    let config = serde_json::json!({
+        "auths": {
+            registry_host: {
+                "auth": auth,
+                "username": registry_username,
+                "password": registry_password,
+            }
+        }
+    });
+    let content = serde_json::to_string_pretty(&config).context("serializing docker config")?;
+    fs::write(
+        docker_config_dir.join("config.json"),
+        format!("{content}\n"),
+    )
+    .with_context(|| {
+        format!(
+            "writing docker auth config to {}",
+            docker_config_dir.join("config.json").display()
+        )
+    })
+}
+
+fn generate_registry_password() -> String {
+    thread_rng()
+        .sample_iter(Alphanumeric)
+        .take(40)
+        .map(char::from)
+        .collect()
 }
 
 fn shell_single_quote(value: &str) -> String {
@@ -929,7 +1340,7 @@ fn shell_single_quote(value: &str) -> String {
 }
 
 fn emit_env(key: &str, value: &str) {
-    println!("{key}={}", shell_single_quote(value));
+    println!("export {key}={}", shell_single_quote(value));
 }
 
 fn default_server_name() -> String {
@@ -968,6 +1379,14 @@ impl Server {
             .iter()
             .find(|n| n.net_type == "public")
             .map(|n| n.ip_address.clone())
+    }
+
+    fn registry_host(&self) -> Option<String> {
+        self.permalink
+            .as_ref()
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty())
+            .map(ToString::to_string)
     }
 }
 
