@@ -11,7 +11,7 @@ COPY proto/ proto/
 # Create dummy sources so cargo can fetch + compile all dependencies
 RUN mkdir src && echo "fn main() {}" > src/main.rs && \
     mkdir xtask/src && echo "fn main() {}" > xtask/src/main.rs && \
-    cargo build --release -p binarylane-controller 2>&1 && \
+    cargo build --release -p binarylane-controller && \
     rm -rf src xtask/src target/release/.fingerprint/binarylane-controller-*
 
 # Now copy real sources — only our crate recompiles

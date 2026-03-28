@@ -44,7 +44,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Create/reuse a remote BinaryLane dev control plane and emit sourceable env vars
-    DevUp(DevUpArgs),
+    DevUp(Box<DevUpArgs>),
     /// Tear down the remote BinaryLane dev control plane from local state
     DevDown(DevDownArgs),
 }
@@ -234,7 +234,7 @@ struct CreateAccountSshKeyRequest {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Commands::DevUp(args) => cmd_dev_up(args),
+        Commands::DevUp(args) => cmd_dev_up(*args),
         Commands::DevDown(args) => cmd_dev_down(args),
     }
 }
@@ -248,7 +248,6 @@ fn cmd_dev_up(args: DevUpArgs) -> Result<()> {
     ensure_parent_dir(&args.known_hosts)?;
     ensure_parent_dir(&args.ssh_key_path)?;
     ensure_parent_dir(&args.tilt_values_out)?;
-    ensure_dir(&args.docker_config_dir)?;
 
     let timeout = Duration::from_secs(args.wait_timeout_secs);
     let ssh_key_path = absolute_path(&args.ssh_key_path)?;
@@ -316,6 +315,7 @@ fn cmd_dev_up(args: DevUpArgs) -> Result<()> {
         )
     })?;
 
+    // Keep the previously persisted username when present so repeated runs remain idempotent.
     let registry_username = if state.registry_username.trim().is_empty() {
         args.registry_username.clone()
     } else {
@@ -359,16 +359,20 @@ fn cmd_dev_up(args: DevUpArgs) -> Result<()> {
         timeout,
     )?;
 
+    let registry_config = RegistryConfig {
+        host: &registry_host,
+        username: &registry_username,
+        password: &registry_password,
+        password_bcrypt: &registry_password_bcrypt,
+        secret_name: &args.registry_secret_name,
+    };
+
     ensure_dev_registry(
         &server_ip,
         &ssh_user,
         Some(&ssh_key_path),
         &args.known_hosts,
-        &registry_host,
-        &registry_username,
-        &registry_password,
-        &registry_password_bcrypt,
-        &args.registry_secret_name,
+        &registry_config,
         timeout,
     )?;
     wait_for_registry_https(
@@ -570,9 +574,7 @@ fn create_dev_server(
             ssh_keys: Some(vec![ssh_key_fingerprint.to_string()]),
         })
         .with_context(|| {
-            format!(
-                "creating BinaryLane server (override defaults with --region/--size/--image if needed)"
-            )
+            "creating BinaryLane server (override defaults with --region/--size/--image if needed)"
         })?;
 
     eprintln!("Created server id={} name={}", server.id, server.name);
@@ -630,7 +632,7 @@ fn wait_for_ssh_ready(
             }
         }
 
-        if attempts == 1 || attempts % 6 == 0 {
+        if attempts == 1 || attempts.is_multiple_of(6) {
             eprintln!(
                 "Still waiting for SSH on {} (tried users: {})",
                 host,
@@ -694,7 +696,7 @@ ${{SUDO}} systemctl is-active --quiet k3s\n"
             ssh_key_path,
             known_hosts,
             &install_script,
-            SshOutputMode::Stderr,
+            SshOutputMode::Forward,
         ) {
             Ok(_) => {
                 eprintln!("k3s ready at {}", k3s_url);
@@ -711,21 +713,25 @@ ${{SUDO}} systemctl is-active --quiet k3s\n"
     }
 }
 
+struct RegistryConfig<'a> {
+    host: &'a str,
+    username: &'a str,
+    password: &'a str,
+    password_bcrypt: &'a str,
+    secret_name: &'a str,
+}
+
 fn ensure_dev_registry(
     host: &str,
     user: &str,
     ssh_key_path: Option<&Path>,
     known_hosts: &Path,
-    registry_host: &str,
-    registry_username: &str,
-    registry_password: &str,
-    registry_password_bcrypt: &str,
-    registry_secret_name: &str,
+    registry: &RegistryConfig<'_>,
     timeout: Duration,
 ) -> Result<()> {
     eprintln!(
         "Deploying authenticated dev registry at https://{}...",
-        registry_host
+        registry.host
     );
 
     let manifest = format!(
@@ -849,14 +855,14 @@ spec:
         registry_data_hostpath = REGISTRY_DATA_HOSTPATH,
         registry_tls_data_hostpath = REGISTRY_TLS_DATA_HOSTPATH,
         registry_tls_config_hostpath = REGISTRY_TLS_CONFIG_HOSTPATH,
-        registry_host = registry_host,
-        registry_username = registry_username,
-        registry_password_bcrypt = registry_password_bcrypt,
+        registry_host = registry.host,
+        registry_username = registry.username,
+        registry_password_bcrypt = registry.password_bcrypt,
     );
 
     let default_sa_patch = format!(
         r#"{{"imagePullSecrets":[{{"name":"{}"}}]}}"#,
-        registry_secret_name
+        registry.secret_name
     );
 
     let script = format!(
@@ -885,10 +891,10 @@ ${{SUDO}} kubectl -n {registry_ns} rollout status deployment/registry-gateway --
 "#,
         manifest = manifest,
         registry_ns = REGISTRY_NAMESPACE,
-        registry_secret_name = shell_single_quote(registry_secret_name),
-        registry_host = shell_single_quote(registry_host),
-        registry_username = shell_single_quote(registry_username),
-        registry_password = shell_single_quote(registry_password),
+        registry_secret_name = shell_single_quote(registry.secret_name),
+        registry_host = shell_single_quote(registry.host),
+        registry_username = shell_single_quote(registry.username),
+        registry_password = shell_single_quote(registry.password),
         default_sa_patch = shell_single_quote(&default_sa_patch),
     );
 
@@ -900,7 +906,7 @@ ${{SUDO}} kubectl -n {registry_ns} rollout status deployment/registry-gateway --
             ssh_key_path,
             known_hosts,
             &script,
-            SshOutputMode::Stderr,
+            SshOutputMode::Forward,
         ) {
             Ok(_) => {
                 eprintln!("Dev registry is configured");
@@ -1001,7 +1007,7 @@ fn ssh_probe(
 
 #[derive(Copy, Clone)]
 enum SshOutputMode {
-    Stderr,
+    Forward,
     Capture,
 }
 
@@ -1048,7 +1054,7 @@ fn run_ssh_script(
     }
 
     match mode {
-        SshOutputMode::Stderr => {
+        SshOutputMode::Forward => {
             if !stdout.trim().is_empty() {
                 eprintln!("{stdout}");
             }
@@ -1199,10 +1205,10 @@ fn ensure_account_ssh_key(
     let keys = client.list_account_ssh_keys()?;
 
     let mut candidate = preferred_id.and_then(|id| keys.iter().find(|k| k.id == id).cloned());
-    if candidate.is_none() {
-        if let Some(fp) = preferred_fingerprint {
-            candidate = keys.iter().find(|k| k.fingerprint == fp).cloned();
-        }
+    if candidate.is_none()
+        && let Some(fp) = preferred_fingerprint
+    {
+        candidate = keys.iter().find(|k| k.fingerprint == fp).cloned();
     }
     if candidate.is_none() {
         candidate = keys.iter().find(|k| k.name == name).cloned();
