@@ -1,6 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
+use k8s_pb::api::core::v1::{Node, NodeCondition, NodeSpec, NodeStatus, Taint};
+use k8s_pb::apimachinery::pkg::api::resource::Quantity;
+use k8s_pb::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+use prost_014::Message;
 use serde::Deserialize;
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
@@ -360,71 +364,107 @@ impl proto::cloud_provider_server::CloudProvider for Provider {
             .find_group(id)
             .ok_or_else(|| Status::not_found(format!("node group {id} not found")))?;
 
-        // Build a K8s Node JSON and serialize it
-        let mut labels = serde_json::Map::new();
+        let mut labels = BTreeMap::new();
         labels.insert(
             "node.kubernetes.io/instance-type".to_string(),
-            serde_json::Value::String(ng.size.clone()),
+            ng.size.clone(),
         );
         labels.insert(
             "topology.kubernetes.io/region".to_string(),
-            serde_json::Value::String(ng.region.clone()),
+            ng.region.clone(),
         );
-        labels.insert(
-            "kubernetes.io/arch".to_string(),
-            serde_json::Value::String("amd64".to_string()),
-        );
-        labels.insert(
-            "kubernetes.io/os".to_string(),
-            serde_json::Value::String("linux".to_string()),
-        );
+        // TODO: derive from size/config if BinaryLane adds ARM instances
+        labels.insert("kubernetes.io/arch".to_string(), "amd64".to_string());
+        labels.insert("kubernetes.io/os".to_string(), "linux".to_string());
         labels.insert(
             "node.kubernetes.io/cloud-provider".to_string(),
-            serde_json::Value::String(binarylane::PROVIDER_NAME.to_string()),
+            binarylane::PROVIDER_NAME.to_string(),
         );
-        for (k, v) in &ng.labels {
-            labels.insert(k.clone(), serde_json::Value::String(v.clone()));
-        }
+        labels.extend(ng.labels.clone());
 
-        let node = serde_json::json!({
-            "apiVersion": "v1",
-            "kind": "Node",
-            "metadata": {
-                "name": format!("template-{}", ng.id),
-                "labels": labels,
+        let mut capacity = BTreeMap::new();
+        capacity.insert(
+            "cpu".to_string(),
+            Quantity {
+                string: Some(ng.vcpus.to_string()),
             },
-            "spec": {
-                "providerID": format!("{PROVIDER_NAME}:///template", PROVIDER_NAME = binarylane::PROVIDER_NAME),
-                "taints": [{
-                    "key": "node.cloudprovider.kubernetes.io/uninitialized",
-                    "value": "true",
-                    "effect": "NoSchedule",
-                }],
+        );
+        capacity.insert(
+            "memory".to_string(),
+            Quantity {
+                string: Some(format!("{}Mi", ng.memory_mb)),
             },
-            "status": {
-                "capacity": {
-                    "cpu": format!("{}", ng.vcpus),
-                    "memory": format!("{}Mi", ng.memory_mb),
-                    "ephemeral-storage": format!("{}Gi", ng.disk_gb),
-                    "pods": "110",
-                },
-                "allocatable": {
-                    "cpu": format!("{}m", (ng.vcpus * 1000).saturating_sub(100)),
-                    "memory": format!("{}Mi", ng.memory_mb.saturating_sub(256)),
-                    "ephemeral-storage": format!("{}Gi", ng.disk_gb.saturating_sub(1)),
-                    "pods": "110",
-                },
-                "conditions": [{
-                    "type": "Ready",
-                    "status": "True",
-                }],
+        );
+        capacity.insert(
+            "ephemeral-storage".to_string(),
+            Quantity {
+                string: Some(format!("{}Gi", ng.disk_gb)),
             },
-        });
+        );
+        capacity.insert(
+            "pods".to_string(),
+            Quantity {
+                string: Some("110".to_string()),
+            },
+        );
 
-        let node_bytes = serde_json::to_vec(&node)
-            .map_err(|e| Status::internal(format!("serializing template node: {e}")))?;
+        let mut allocatable = BTreeMap::new();
+        allocatable.insert(
+            "cpu".to_string(),
+            Quantity {
+                string: Some(format!("{}m", (ng.vcpus * 1000).saturating_sub(100))),
+            },
+        );
+        allocatable.insert(
+            "memory".to_string(),
+            Quantity {
+                string: Some(format!("{}Mi", ng.memory_mb.saturating_sub(256))),
+            },
+        );
+        allocatable.insert(
+            "ephemeral-storage".to_string(),
+            Quantity {
+                string: Some(format!("{}Gi", ng.disk_gb.saturating_sub(1))),
+            },
+        );
+        allocatable.insert(
+            "pods".to_string(),
+            Quantity {
+                string: Some("110".to_string()),
+            },
+        );
+
+        let node = Node {
+            metadata: Some(ObjectMeta {
+                name: Some(format!("template-{}", ng.id)),
+                labels,
+                ..Default::default()
+            }),
+            spec: Some(NodeSpec {
+                provider_id: Some(format!("{}:///template", binarylane::PROVIDER_NAME)),
+                taints: vec![Taint {
+                    key: Some("node.cloudprovider.kubernetes.io/uninitialized".to_string()),
+                    value: Some("true".to_string()),
+                    effect: Some("NoSchedule".to_string()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            status: Some(NodeStatus {
+                capacity,
+                allocatable,
+                conditions: vec![NodeCondition {
+                    r#type: Some("Ready".to_string()),
+                    status: Some("True".to_string()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        };
+
+        let node_bytes = node.encode_to_vec();
         Ok(Response::new(proto::NodeGroupTemplateNodeInfoResponse {
-            node_info: node_bytes,
+            node_bytes,
         }))
     }
 
