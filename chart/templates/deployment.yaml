@@ -38,6 +38,10 @@ spec:
                 secretKeyRef:
                   name: {{ include "binarylane-controller.secretName" . }}
                   key: {{ .Values.existingSecretKey }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             {{- if .Values.autoscaler.enabled }}
             - name: CONFIG_PATH
               value: /etc/binarylane-controller/config.json
