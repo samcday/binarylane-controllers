@@ -188,11 +188,11 @@ impl Client {
             #[derive(Deserialize)]
             struct Resp {
                 servers: Vec<Server>,
-                links: Links,
+                links: Option<Links>,
             }
             let r: Resp = resp.json().await.context("decoding servers")?;
             all.extend(r.servers);
-            if r.links.pages.next.is_none() {
+            if r.links.and_then(|l| l.pages.next).is_none() {
                 break;
             }
             page += 1;
