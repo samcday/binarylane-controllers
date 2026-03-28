@@ -111,7 +111,7 @@ message InstanceStatus {
 message InstanceErrorInfo { string errorCode = 1; string errorMessage = 2; int32 instanceErrorClass = 3; }
 
 message NodeGroupTemplateNodeInfoRequest { string id = 1; }
-message NodeGroupTemplateNodeInfoResponse { bytes nodeInfo = 1; }
+message NodeGroupTemplateNodeInfoResponse { bytes nodeBytes = 2; }
 
 message NodeGroupAutoscalingOptions {
   double scaleDownUtilizationThreshold = 1;
