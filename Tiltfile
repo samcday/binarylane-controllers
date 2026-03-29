@@ -31,7 +31,10 @@ docker_build(
     only=["Cargo.toml", "Cargo.lock", "build.rs", "src/", "proto/", "xtask/Cargo.toml"],
 )
 
-# Deploy via Helm chart
+# Deploy via Helm chart.
+# Cloud-init is read from a file so edits take effect immediately via Tilt
+# file-watching, without needing to re-run `cargo xtask dev-up`.
+_cloud_init = str(read_file("dev-cloud-init.sh")).strip()
 controller_manifests = helm(
     "chart",
     name="binarylane-controller",
@@ -42,6 +45,7 @@ controller_manifests = helm(
         "image.tag=latest",
         "image.pullPolicy=Always",
         "imagePullSecrets[0].name=" + registry_pull_secret,
+        "autoscaler.cloudInit=" + _cloud_init,
     ],
     values=["tilt-values.yaml", generated_values],
 )
@@ -95,11 +99,10 @@ helm_resource(
 # so it doesn't trigger scale-up by default. Use kubectl to scale:
 #   kubectl scale deploy/scale-test --replicas=3   # force node scale-up
 #   kubectl scale deploy/scale-test --replicas=0   # allow scale-down
-# trigger_mode=MANUAL prevents Tilt from re-applying and resetting replicas.
+# Note: Tiltfile re-eval will reset replicas to 0. Just re-scale after.
 k8s_yaml("scale-test.yaml")
 k8s_resource(
     "scale-test",
-    trigger_mode=TRIGGER_MODE_MANUAL,
     resource_deps=["cluster-autoscaler"],
     labels=["test"],
 )

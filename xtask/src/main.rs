@@ -1388,9 +1388,6 @@ fn write_dev_tilt_values(
 ) -> Result<()> {
     ensure_parent_dir(tilt_values_path)?;
 
-    let cloud_init = dev_worker_cloud_init_template();
-    let cloud_init_indented = indent_block(&cloud_init, 4);
-
     let contents = format!(
         r#"autoscaler:
   enabled: true
@@ -1411,8 +1408,6 @@ fn write_dev_tilt_values(
         diskGb: 25
         labels:
           autoscale-group: "{group_id}"
-  cloudInit: |
-{cloud_init}
 mtls:
   enabled: true
 templateVars:
@@ -1424,7 +1419,6 @@ templateVars:
         size = yaml_escape(&args.size),
         region = yaml_escape(&args.region),
         image = yaml_escape(&args.image),
-        cloud_init = cloud_init_indented,
         k3s_url = yaml_escape(k3s_url),
         k3s_token = yaml_escape(k3s_token),
     );
@@ -1435,41 +1429,6 @@ templateVars:
             tilt_values_path.display()
         )
     })
-}
-
-fn dev_worker_cloud_init_template() -> String {
-    "#!/bin/sh
-set -eu
-if [ \"$(id -u)\" -eq 0 ]; then
-  SUDO=\"\"
-else
-  SUDO=\"sudo\"
-fi
-if ! command -v curl >/dev/null 2>&1; then
-  if command -v apt-get >/dev/null 2>&1; then
-    ${SUDO} apt-get update -y
-    ${SUDO} apt-get install -y curl
-  elif command -v dnf >/dev/null 2>&1; then
-    ${SUDO} dnf install -y curl
-  elif command -v apk >/dev/null 2>&1; then
-    ${SUDO} apk add --no-cache curl
-  fi
-fi
-if ! command -v k3s >/dev/null 2>&1; then
-  curl -sfL https://get.k3s.io | ${SUDO} env K3S_URL=\"{{.K3S_URL}}\" K3S_TOKEN=\"{{.K3S_TOKEN}}\" INSTALL_K3S_EXEC=\"agent --node-name {{.NodeName}} --node-label autoscale-group={{.NodeGroup}}\" sh -s -
-fi
-${SUDO} systemctl enable --now k3s-agent >/dev/null 2>&1 || true
-"
-    .to_string()
-}
-
-fn indent_block(block: &str, spaces: usize) -> String {
-    let indent = " ".repeat(spaces);
-    block
-        .lines()
-        .map(|line| format!("{indent}{line}"))
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn yaml_escape(value: &str) -> String {
