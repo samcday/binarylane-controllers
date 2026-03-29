@@ -47,6 +47,8 @@ enum Commands {
     DevUp(Box<DevUpArgs>),
     /// Tear down the remote BinaryLane dev control plane from local state
     DevDown(DevDownArgs),
+    /// Launch Tilt with project-appropriate defaults (--port 0 to avoid collisions)
+    Tilt(TiltArgs),
 }
 
 #[derive(Debug, Args)]
@@ -122,6 +124,13 @@ struct DevUpArgs {
     /// Timeout used for server/SSH/k3s readiness
     #[arg(long, env = "BL_DEV_WAIT_TIMEOUT_SECS", default_value_t = 900)]
     wait_timeout_secs: u64,
+}
+
+#[derive(Debug, Args)]
+struct TiltArgs {
+    /// Extra arguments passed through to `tilt`
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    args: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -236,6 +245,7 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::DevUp(args) => cmd_dev_up(*args),
         Commands::DevDown(args) => cmd_dev_down(args),
+        Commands::Tilt(args) => cmd_tilt(args),
     }
 }
 
@@ -552,6 +562,26 @@ fn cmd_dev_down(args: DevDownArgs) -> Result<()> {
 
     eprintln!("Local dev state cleaned up");
     Ok(())
+}
+
+fn cmd_tilt(args: TiltArgs) -> Result<()> {
+    ensure_tool("tilt", "install Tilt: https://docs.tilt.dev/install.html")?;
+
+    let mut cmd = Command::new("tilt");
+
+    // Default to `up` if no subcommand given (or first arg is a flag).
+    let has_subcommand = args.args.first().is_some_and(|a| !a.starts_with('-'));
+    if !has_subcommand {
+        cmd.arg("up");
+    }
+
+    // --port 0 lets the OS pick a free port, avoiding collisions when
+    // multiple Tilt instances run across different projects.
+    cmd.arg("--port").arg("0");
+    cmd.args(&args.args);
+
+    let status = cmd.status().context("running tilt")?;
+    std::process::exit(status.code().unwrap_or(1));
 }
 
 fn create_dev_server(

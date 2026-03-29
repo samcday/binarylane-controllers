@@ -80,7 +80,7 @@ data:
 
 _ca_flags = ["--values=cluster-autoscaler-dev-values.yaml"]
 if _mtls_hash:
-    _ca_flags.append("--set=podAnnotations.checksum/mtls-client=" + _mtls_hash)
+    _ca_flags.append("--set-string=podAnnotations.checksum/mtls-client=" + _mtls_hash)
 
 helm_resource(
     "cluster-autoscaler",
