@@ -84,12 +84,14 @@ async fn reconcile_node(
     let mut needs_update = false;
     let mut needs_status_update = false;
 
-    // Build desired addresses
+    // Build desired addresses.
+    // BL reports phantom private IPs even without a VPC — skip them.
     let mut desired_addresses = Vec::new();
     for net in &server.networks.v4 {
         let addr_type = match net.net_type.as_str() {
             "public" => "ExternalIP",
-            "private" => "InternalIP",
+            "private" if server.vpc_id.is_some() => "InternalIP",
+            "private" => continue,
             _ => continue,
         };
         desired_addresses.push(serde_json::json!({
