@@ -361,6 +361,7 @@ impl proto::cloud_provider_server::CloudProvider for Provider {
                     api_version: Some("v1".to_string()),
                     kind: Some("Node".to_string()),
                     name: Some(name.clone()),
+                    namespace: Some(self.pod_namespace.clone()),
                     ..Default::default()
                 }),
                 reason: Some("ServerCreated".to_string()),
