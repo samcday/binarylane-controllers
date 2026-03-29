@@ -32,7 +32,7 @@ docker_build(
 )
 
 # Deploy via Helm chart
-k8s_yaml(helm(
+controller_manifests = helm(
     "chart",
     name="binarylane-controller",
     namespace="binarylane-system",
@@ -44,7 +44,16 @@ k8s_yaml(helm(
         "imagePullSecrets[0].name=" + registry_pull_secret,
     ],
     values=["tilt-values.yaml", generated_values],
-))
+)
+k8s_yaml(controller_manifests)
+
+# Extract a change-detection hash from the mTLS client secret so we can
+# roll the cluster-autoscaler pod whenever certs are regenerated.
+_mtls_hash = ""
+for _obj in decode_yaml_stream(controller_manifests):
+    if _obj.get("kind") == "Secret" and _obj.get("metadata", {}).get("name") == "binarylane-controller-mtls-client":
+        _mtls_hash = str(hash(str(_obj.get("data", {}))))
+        break
 
 k8s_resource(
     "binarylane-controller",
@@ -69,11 +78,15 @@ data:
     cacert: "/etc/ssl/client-cert/ca.crt"
 """))
 
+_ca_flags = ["--values=cluster-autoscaler-dev-values.yaml"]
+if _mtls_hash:
+    _ca_flags.append("--set=podAnnotations.checksum/mtls-client=" + _mtls_hash)
+
 helm_resource(
     "cluster-autoscaler",
     "autoscaler-charts/cluster-autoscaler",
     namespace="binarylane-system",
-    flags=["--values=cluster-autoscaler-dev-values.yaml"],
+    flags=_ca_flags,
     resource_deps=["binarylane-controller"],
     labels=["autoscaler"],
 )
