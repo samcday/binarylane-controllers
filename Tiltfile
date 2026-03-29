@@ -90,3 +90,16 @@ helm_resource(
     resource_deps=["binarylane-controller"],
     labels=["autoscaler"],
 )
+
+# Scale-test deployment for exercising the autoscaler. Created with replicas=0
+# so it doesn't trigger scale-up by default. Use kubectl to scale:
+#   kubectl scale deploy/scale-test --replicas=3   # force node scale-up
+#   kubectl scale deploy/scale-test --replicas=0   # allow scale-down
+# trigger_mode=MANUAL prevents Tilt from re-applying and resetting replicas.
+k8s_yaml("scale-test.yaml")
+k8s_resource(
+    "scale-test",
+    trigger_mode=TRIGGER_MODE_MANUAL,
+    resource_deps=["cluster-autoscaler"],
+    labels=["test"],
+)
