@@ -523,9 +523,9 @@ impl axum::serve::Listener for RustlsListener {
             match self.listener.accept().await {
                 Ok((stream, addr)) => match self.acceptor.accept(stream).await {
                     Ok(tls_stream) => return (tls_stream, addr),
-                    Err(error) => error!(error = %error, "TLS handshake failed"),
+                    Err(error) => error!(error = %error, "TLS handshake failed, continuing"),
                 },
-                Err(error) => error!(error = %error, "accepting TCP connection failed"),
+                Err(error) => error!(error = %error, "accepting TCP connection failed, continuing"),
             }
         }
     }

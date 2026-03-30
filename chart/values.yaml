@@ -43,6 +43,10 @@ externalDns:
   enabled: false
   listenAddr: "0.0.0.0:8888"
   mtls:
+    # mTLS is enabled by default when external-dns is enabled. Set to false for
+    # plain HTTP, e.g. when the webhook is only reachable within the cluster and
+    # certificate management is not desired. Only disable mTLS when network-level
+    # controls (e.g. NetworkPolicy) prevent unauthorized access to the webhook.
     enabled: true
     clientSecretName: binarylane-controller-external-dns-mtls-client
 
