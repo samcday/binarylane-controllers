@@ -1,4 +1,4 @@
-{{- if or (and .Values.autoscaler.enabled .Values.mtls.enabled) (and .Values.externalDns.enabled .Values.externalDns.mtls.enabled) }}
+{{- if and (or (and .Values.autoscaler.enabled .Values.mtls.enabled) (and .Values.externalDns.enabled .Values.externalDns.mtls.enabled)) (ne (toString .Values.mtls.generate) "false") }}
 {{- $fullname := include "binarylane-controller.fullname" . -}}
 {{- $svcName := printf "%s.%s.svc" $fullname .Release.Namespace -}}
 {{- $svcCluster := printf "%s.%s.svc.cluster.local" $fullname .Release.Namespace -}}

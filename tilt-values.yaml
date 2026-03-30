@@ -7,9 +7,8 @@ autoscaler:
 
 externalDns:
   enabled: true
-
-mtls:
-  enabled: false
+  mtls:
+    enabled: true
 
 resources:
   requests:

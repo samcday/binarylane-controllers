@@ -33,6 +33,8 @@ templateVars: {}
 
 mtls:
   enabled: true
+  # Set to false to skip cert generation (e.g. when secrets are managed externally)
+  generate: true
   # Name of the Secret created with client credentials for cluster-autoscaler
   clientSecretName: binarylane-controller-mtls-client
 
