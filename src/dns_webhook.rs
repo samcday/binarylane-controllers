@@ -224,6 +224,27 @@ async fn post_records(
     let domains = state.bl.list_domains().await?;
     let domain_names: Vec<String> = domains.iter().map(|d| d.name.clone()).collect();
 
+    let mut needed_domains: HashSet<String> = HashSet::new();
+    for endpoint in changes
+        .update_old
+        .iter()
+        .chain(changes.update_new.iter())
+        .chain(changes.delete.iter())
+    {
+        let (domain, _) = map_endpoint_to_domain(endpoint, &domain_names)?;
+        needed_domains.insert(domain);
+    }
+    let records_by_domain = try_join_all(needed_domains.into_iter().map(|domain_name| {
+        let bl = state.bl.clone();
+        async move {
+            let records = bl.list_domain_records(&domain_name).await?;
+            Ok::<_, anyhow::Error>((domain_name, records))
+        }
+    }))
+    .await?;
+    let records_map: HashMap<String, Vec<binarylane::DomainRecord>> =
+        records_by_domain.into_iter().collect();
+
     for endpoint in &changes.create {
         let (domain, record_name) = map_endpoint_to_domain(endpoint, &domain_names)?;
         let priority = endpoint_priority(endpoint)?;
@@ -250,11 +271,12 @@ async fn post_records(
     apply_updates(
         &state,
         &domain_names,
+        &records_map,
         &changes.update_old,
         &changes.update_new,
     )
     .await?;
-    apply_deletes(&state, &domain_names, &changes.delete).await?;
+    apply_deletes(&state, &domain_names, &records_map, &changes.delete).await?;
 
     // Flush nameserver cache for affected domains
     let mut affected_domains: HashSet<String> = HashSet::new();
@@ -287,9 +309,12 @@ async fn post_adjust_endpoints(
 async fn apply_updates(
     state: &AppState,
     domains: &[String],
+    records_map: &HashMap<String, Vec<binarylane::DomainRecord>>,
     old: &[Endpoint],
     new: &[Endpoint],
 ) -> Result<()> {
+    let empty_records: Vec<binarylane::DomainRecord> = Vec::new();
+
     for (old_ep, new_ep) in old.iter().zip(new.iter()) {
         let (domain, record_name) = map_endpoint_to_domain(new_ep, domains)?;
         let old_targets: HashSet<&str> = old_ep.targets.iter().map(String::as_str).collect();
@@ -321,7 +346,7 @@ async fn apply_updates(
 
         // Then delete old records that are no longer needed
         if !to_delete.is_empty() {
-            let records = state.bl.list_domain_records(&domain).await?;
+            let records = records_map.get(&domain).unwrap_or(&empty_records);
             for record in records {
                 if record.name == record_name
                     && record.record_type.eq_ignore_ascii_case(&old_ep.record_type)
@@ -336,11 +361,18 @@ async fn apply_updates(
     Ok(())
 }
 
-async fn apply_deletes(state: &AppState, domains: &[String], endpoints: &[Endpoint]) -> Result<()> {
+async fn apply_deletes(
+    state: &AppState,
+    domains: &[String],
+    records_map: &HashMap<String, Vec<binarylane::DomainRecord>>,
+    endpoints: &[Endpoint],
+) -> Result<()> {
+    let empty_records: Vec<binarylane::DomainRecord> = Vec::new();
+
     for endpoint in endpoints {
         let (domain, record_name) = map_endpoint_to_domain(endpoint, domains)?;
         let targets: HashSet<&str> = endpoint.targets.iter().map(String::as_str).collect();
-        let records = state.bl.list_domain_records(&domain).await?;
+        let records = records_map.get(&domain).unwrap_or(&empty_records);
         for record in records {
             if record.name != record_name
                 || !record
