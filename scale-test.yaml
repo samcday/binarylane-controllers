@@ -25,7 +25,25 @@ spec:
       containers:
       - name: pause
         image: registry.k8s.io/pause:3.9
+        ports:
+        - containerPort: 80
+          name: http
         resources:
           requests:
             cpu: 100m
             memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: scale-test
+  namespace: default
+spec:
+  type: LoadBalancer
+  loadBalancerClass: binarylane.com.au/load-balancer
+  selector:
+    app: scale-test
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
