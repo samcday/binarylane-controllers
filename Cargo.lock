@@ -230,6 +230,7 @@ name = "binarylane-client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "rand 0.8.5",
  "reqwest",
  "serde",
 ]
@@ -3247,6 +3248,7 @@ dependencies = [
  "anyhow",
  "base64",
  "bcrypt",
+ "binarylane-client",
  "clap",
  "rand 0.8.5",
  "reqwest",

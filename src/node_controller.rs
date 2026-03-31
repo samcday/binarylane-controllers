@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use k8s_openapi::api::core::v1::Node;
+use k8s_openapi::api::core::v1::{Node, Secret};
 use kube::{Api, Client as KubeClient, api::PatchParams};
 use tracing::{error, info};
 
@@ -9,9 +9,15 @@ use crate::binarylane::{self, Client as BlClient};
 
 const UNINITIALIZED_TAINT: &str = "node.cloudprovider.kubernetes.io/uninitialized";
 pub const FINALIZER: &str = "blc.samcday.com/server-cleanup";
+const NODE_PASSWORD_SECRET_SUFFIX: &str = "-node-password";
 
-pub async fn reconcile(bl: &BlClient, k8s: &KubeClient) {
+pub fn node_password_secret_name(node_name: &str) -> String {
+    format!("{node_name}{NODE_PASSWORD_SECRET_SUFFIX}")
+}
+
+pub async fn reconcile(bl: &BlClient, k8s: &KubeClient, secret_namespace: &str) {
     let nodes_api: Api<Node> = Api::all(k8s.clone());
+    let secrets_api: Api<Secret> = Api::namespaced(k8s.clone(), secret_namespace);
     let nodes = match nodes_api.list(&Default::default()).await {
         Ok(list) => list,
         Err(e) => {
@@ -30,7 +36,7 @@ pub async fn reconcile(bl: &BlClient, k8s: &KubeClient) {
         let Some(server_id) = binarylane::parse_provider_id(provider_id) else {
             continue;
         };
-        if let Err(e) = reconcile_node(bl, &nodes_api, node, name, server_id).await {
+        if let Err(e) = reconcile_node(bl, &nodes_api, &secrets_api, node, name, server_id).await {
             error!(error = %e, node = name, server_id, "reconciling node");
         }
     }
@@ -39,6 +45,7 @@ pub async fn reconcile(bl: &BlClient, k8s: &KubeClient) {
 async fn reconcile_node(
     bl: &BlClient,
     nodes_api: &Api<Node>,
+    secrets_api: &Api<Secret>,
     node: &Node,
     name: &str,
     server_id: i64,
@@ -59,6 +66,19 @@ async fn reconcile_node(
         bl.delete_server(server_id)
             .await
             .context("deleting server")?;
+
+        let secret_name = node_password_secret_name(name);
+        match secrets_api.delete(&secret_name, &Default::default()).await {
+            Ok(_) => {
+                info!(node = name, secret = %secret_name, "deleted node password secret");
+            }
+            Err(kube::Error::Api(err)) if err.code == 404 => {}
+            Err(e) => {
+                return Err(e)
+                    .with_context(|| format!("deleting node password secret {}", secret_name));
+            }
+        }
+
         let patch = serde_json::json!({
             "metadata": {
                 "finalizers": node.metadata.finalizers.as_ref()
@@ -87,6 +107,43 @@ async fn reconcile_node(
             .context("deleting node")?;
         return Ok(());
     };
+
+    // Ensure password secret has ownerReference to this node (secret is created
+    // before the node exists, so we tether it here on first reconciliation).
+    let secret_name = node_password_secret_name(name);
+    if let Ok(Some(secret)) = secrets_api.get_opt(&secret_name).await {
+        let has_owner_ref = secret
+            .metadata
+            .owner_references
+            .as_ref()
+            .is_some_and(|refs| refs.iter().any(|r| r.kind == "Node" && r.name == name));
+        if !has_owner_ref && let Some(node_uid) = &node.metadata.uid {
+            let patch = serde_json::json!({
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": {
+                    "name": secret_name,
+                    "ownerReferences": [{
+                        "apiVersion": "v1",
+                        "kind": "Node",
+                        "name": name,
+                        "uid": node_uid,
+                        "blockOwnerDeletion": false,
+                    }]
+                }
+            });
+            if let Err(e) = secrets_api
+                .patch(
+                    &secret_name,
+                    &PatchParams::apply("binarylane-controller-node").force(),
+                    &kube::api::Patch::Apply(&patch),
+                )
+                .await
+            {
+                error!(node = name, secret = %secret_name, error = %e, "setting ownerReference on password secret");
+            }
+        }
+    }
 
     let mut needs_update = false;
     let mut needs_status_update = false;
