@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use base64::Engine;
-use bcrypt::{DEFAULT_COST, hash};
+use bcrypt::hash;
 use clap::{Args, Parser, Subcommand};
 use rand::distributions::Alphanumeric;
 use rand::{Rng, thread_rng};
@@ -337,8 +337,9 @@ fn cmd_dev_up(args: DevUpArgs) -> Result<()> {
         .registry_password
         .clone()
         .unwrap_or_else(generate_registry_password);
-    let registry_password_bcrypt = hash(&registry_password, DEFAULT_COST)
-        .context("hashing registry password for basic auth")?;
+    // Cost 4 (minimum) is fine for a dev-only registry credential.
+    let registry_password_bcrypt =
+        hash(&registry_password, 4).context("hashing registry password for basic auth")?;
 
     state.registry_host = Some(registry_host.clone());
     state.registry_username = registry_username.clone();
