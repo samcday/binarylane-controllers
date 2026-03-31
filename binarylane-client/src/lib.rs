@@ -107,8 +107,11 @@ pub struct LoadBalancer {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ForwardingRule {
     pub entry_protocol: String,
+    #[serde(default)]
     pub entry_port: i32,
+    #[serde(default)]
     pub target_protocol: String,
+    #[serde(default)]
     pub target_port: i32,
 }
 
@@ -330,6 +333,25 @@ impl Client {
             bail!("deleting server {server_id}: {status}: {body}");
         }
         Ok(())
+    }
+
+    pub async fn list_load_balancers(&self) -> Result<Vec<LoadBalancer>> {
+        let resp = self
+            .request(reqwest::Method::GET, "/load_balancers")
+            .send()
+            .await
+            .context("listing load balancers")?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            bail!("listing load balancers: {status}: {body}");
+        }
+        #[derive(Deserialize)]
+        struct Resp {
+            load_balancers: Vec<LoadBalancer>,
+        }
+        let r: Resp = resp.json().await.context("decoding load balancers")?;
+        Ok(r.load_balancers)
     }
 
     pub async fn get_load_balancer(&self, lb_id: i64) -> Result<Option<LoadBalancer>> {
