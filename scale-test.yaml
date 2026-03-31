@@ -23,10 +23,10 @@ spec:
       nodeSelector:
         autoscale-group: workers
       containers:
-      - name: pause
-        image: registry.k8s.io/pause:3.9
+      - name: httpbin
+        image: mccutchen/go-httpbin:v2.15.0
         ports:
-        - containerPort: 80
+        - containerPort: 8080
           name: http
         resources:
           requests:
@@ -46,4 +46,4 @@ spec:
   ports:
   - name: http
     port: 80
-    targetPort: http
+    targetPort: 8080
