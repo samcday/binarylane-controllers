@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use k8s_openapi::api::core::v1::{Node, Secret};
 use kube::{Api, Client as KubeClient, api::PatchParams};
 use tracing::{error, info};
@@ -79,15 +79,6 @@ async fn reconcile_node(
             }
         }
 
-        if secrets_api
-            .get_opt(&secret_name)
-            .await
-            .with_context(|| format!("confirming node password secret {} deletion", secret_name))?
-            .is_some()
-        {
-            bail!("node password secret {} still exists", secret_name);
-        }
-
         let patch = serde_json::json!({
             "metadata": {
                 "finalizers": node.metadata.finalizers.as_ref()
@@ -116,6 +107,43 @@ async fn reconcile_node(
             .context("deleting node")?;
         return Ok(());
     };
+
+    // Ensure password secret has ownerReference to this node (secret is created
+    // before the node exists, so we tether it here on first reconciliation).
+    let secret_name = node_password_secret_name(name);
+    if let Ok(Some(secret)) = secrets_api.get_opt(&secret_name).await {
+        let has_owner_ref = secret
+            .metadata
+            .owner_references
+            .as_ref()
+            .is_some_and(|refs| refs.iter().any(|r| r.kind == "Node" && r.name == name));
+        if !has_owner_ref && let Some(node_uid) = &node.metadata.uid {
+            let patch = serde_json::json!({
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": {
+                    "name": secret_name,
+                    "ownerReferences": [{
+                        "apiVersion": "v1",
+                        "kind": "Node",
+                        "name": name,
+                        "uid": node_uid,
+                        "blockOwnerDeletion": false,
+                    }]
+                }
+            });
+            if let Err(e) = secrets_api
+                .patch(
+                    &secret_name,
+                    &PatchParams::apply("binarylane-controller-node").force(),
+                    &kube::api::Patch::Apply(&patch),
+                )
+                .await
+            {
+                error!(node = name, secret = %secret_name, error = %e, "setting ownerReference on password secret");
+            }
+        }
+    }
 
     let mut needs_update = false;
     let mut needs_status_update = false;

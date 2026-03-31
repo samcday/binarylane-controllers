@@ -1449,12 +1449,7 @@ fn generate_registry_password() -> String {
 }
 
 fn generate_server_password() -> String {
-    let random: String = thread_rng()
-        .sample_iter(Alphanumeric)
-        .take(36)
-        .map(char::from)
-        .collect();
-    format!("BlcA1{random}")
+    binarylane_client::generate_server_password()
 }
 
 fn shell_single_quote(value: &str) -> String {

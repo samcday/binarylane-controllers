@@ -12,7 +12,6 @@ use k8s_pb::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use kube::Api;
 use kube::api::{Patch, PatchParams};
 use prost_014::Message;
-use rand::{Rng, distributions::Alphanumeric, thread_rng};
 use serde::Deserialize;
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
@@ -355,7 +354,14 @@ impl proto::cloud_provider_server::CloudProvider for Provider {
             vars.insert("Region".to_string(), ng.region.clone());
             vars.insert("Size".to_string(), ng.size.clone());
             let user_data = self.render_cloud_init(&vars);
-            let server_password = generate_server_password();
+            let server_password = binarylane::generate_server_password();
+
+            // Persist password before server creation so it is not lost if a
+            // later API call fails after BinaryLane accepts the server create.
+            // The initial secret uses a placeholder server ID; we patch it
+            // again with the real ID once create_server returns.
+            self.upsert_node_password_secret(&name, 0, &server_password)
+                .await?;
 
             info!(name = %name, size = %ng.size, region = %ng.region, "creating server");
             let srv = self
@@ -377,6 +383,8 @@ impl proto::cloud_provider_server::CloudProvider for Provider {
                 .map_err(|e| Status::internal(format!("creating server: {e}")))?;
 
             self.servers.write().await.insert(srv.id, srv.clone());
+
+            // Update server-id annotation now that we have the real ID.
             self.upsert_node_password_secret(&name, srv.id, &server_password)
                 .await?;
 
@@ -639,16 +647,6 @@ impl proto::cloud_provider_server::CloudProvider for Provider {
     ) -> Result<Response<proto::NodeGroupAutoscalingOptionsResponse>, Status> {
         Err(Status::unimplemented("not implemented"))
     }
-}
-
-fn generate_server_password() -> String {
-    let mut rng = thread_rng();
-    let suffix: String = (&mut rng)
-        .sample_iter(Alphanumeric)
-        .take(36)
-        .map(char::from)
-        .collect();
-    format!("BlcA1{suffix}")
 }
 
 fn chrono_like_timestamp() -> String {

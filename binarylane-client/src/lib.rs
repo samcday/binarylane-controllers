@@ -1,4 +1,7 @@
 use anyhow::{Context, Result, bail};
+use rand::Rng;
+use rand::distributions::Alphanumeric;
+use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_API_BASE: &str = "https://api.binarylane.com.au/v2";
@@ -7,6 +10,18 @@ pub const PROVIDER_NAME: &str = "binarylane";
 
 pub fn server_provider_id(server_id: i64) -> String {
     format!("{PROVIDER_NAME}:///{server_id}")
+}
+
+/// Generate a cryptographically secure random password for BinaryLane server creation.
+/// Uses OS-provided entropy via `OsRng`. The "BlcA1" prefix guarantees the password
+/// meets typical complexity requirements (uppercase, lowercase, digit).
+pub fn generate_server_password() -> String {
+    let suffix: String = OsRng
+        .sample_iter(Alphanumeric)
+        .take(36)
+        .map(char::from)
+        .collect();
+    format!("BlcA1{suffix}")
 }
 
 pub fn parse_provider_id(pid: &str) -> Option<i64> {

@@ -230,6 +230,7 @@ name = "binarylane-client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "rand 0.8.5",
  "reqwest",
  "serde",
 ]
@@ -249,7 +250,6 @@ dependencies = [
  "prost 0.13.5",
  "prost 0.14.3",
  "prost-types",
- "rand 0.8.5",
  "reqwest",
  "rustls",
  "rustls-pemfile",
@@ -3248,6 +3248,7 @@ dependencies = [
  "anyhow",
  "base64",
  "bcrypt",
+ "binarylane-client",
  "clap",
  "rand 0.8.5",
  "reqwest",
