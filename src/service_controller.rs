@@ -105,8 +105,15 @@ async fn reconcile_service(
         .collect();
 
     let first_node_port = ports.first().and_then(|p| p.node_port).unwrap_or(80);
+    let has_http = rules.iter().any(|r| r.entry_protocol == "http");
+    let has_https = rules.iter().any(|r| r.entry_protocol == "https");
+    let hc_protocol = match (has_http, has_https) {
+        (true, true) => "both",
+        (_, true) => "https",
+        _ => "http",
+    };
     let health_check = binarylane::HealthCheck {
-        protocol: "http".to_string(),
+        protocol: hc_protocol.to_string(),
         port: first_node_port,
         path: Some("/".to_string()),
         check_interval_seconds: 10,
