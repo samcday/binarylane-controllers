@@ -316,24 +316,9 @@ impl proto::cloud_provider_server::CloudProvider for Provider {
             )));
         }
 
-        let images = self
-            .bl
-            .list_images()
-            .await
-            .map_err(|e| Status::internal(format!("listing images: {e}")))?;
-        if !images
-            .iter()
-            .any(|image| image.slug.as_deref() == Some(ng.image.as_str()))
-        {
-            return Err(Status::invalid_argument(format!(
-                "image slug '{}' not found in BinaryLane image list",
-                ng.image
-            )));
-        }
-
-        // Create Secrets first (persist data before Node creation), then create
-        // the Node with provision labels. The node-provision reconciler will pick
-        // up the Node on its next cycle and create the BL server.
+        // Create user-data Secret (cloud-init is CA-specific), then create the
+        // Node with provision labels. The node-provision reconciler handles
+        // password generation, validation, and server creation.
         let node_api: Api<K8sNode> = Api::all(self.k8s.clone());
         for i in 0..req.delta {
             let ts = chrono_like_timestamp();
@@ -345,16 +330,7 @@ impl proto::cloud_provider_server::CloudProvider for Provider {
             vars.insert("Region".to_string(), ng.region.clone());
             vars.insert("Size".to_string(), ng.size.clone());
             let user_data = self.render_cloud_init(&vars);
-            let server_password = binarylane::generate_server_password();
 
-            // Create secrets before Node so data is persisted even if Node
-            // creation fails.
-            self.create_secret(
-                &controllers::node_password_secret_name(&name),
-                "password",
-                &server_password,
-            )
-            .await?;
             self.create_secret(
                 &controllers::user_data_secret_name(&name),
                 "user-data",
