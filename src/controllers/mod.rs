@@ -41,8 +41,6 @@ const DEFAULT_CONTROLLERS: &[&str] = &[
     "node-bind",
     "node-provision",
     "service",
-    "autoscaler",
-    "dns-webhook",
 ];
 
 /// Resolve a controller spec string into the set of enabled controller names.
@@ -92,8 +90,8 @@ mod tests {
         assert!(set.contains("node-bind"));
         assert!(set.contains("node-provision"));
         assert!(set.contains("service"));
-        assert!(set.contains("autoscaler"));
-        assert!(set.contains("dns-webhook"));
+        assert!(!set.contains("autoscaler"));
+        assert!(!set.contains("dns-webhook"));
     }
 
     #[test]

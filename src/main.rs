@@ -46,6 +46,14 @@ struct Args {
     #[arg(long, env = "EXTERNAL_DNS_LISTEN_ADDR")]
     external_dns_listen_addr: Option<String>,
 
+    /// Enable external-dns webhook server
+    #[arg(long, env = "EXTERNAL_DNS_WEBHOOK", default_value_t = false)]
+    external_dns_webhook: bool,
+
+    /// Enable cluster-autoscaler gRPC service
+    #[arg(long, env = "CLUSTER_AUTOSCALER_SERVICE", default_value_t = false)]
+    cluster_autoscaler_service: bool,
+
     /// Namespace the controller runs in (for namespaced Secret reconciliation)
     #[arg(long, env = "POD_NAMESPACE", default_value = "binarylane-system")]
     pod_namespace: String,
@@ -193,7 +201,7 @@ async fn main() -> Result<()> {
     };
 
     if let Some(listen_addr) = args.external_dns_listen_addr.clone()
-        && enabled.contains("dns-webhook")
+        && args.external_dns_webhook
     {
         let addr = listen_addr
             .parse()
@@ -210,7 +218,7 @@ async fn main() -> Result<()> {
     }
 
     // Load autoscaler config
-    if !enabled.contains("autoscaler") {
+    if !args.cluster_autoscaler_service {
         std::future::pending::<()>().await;
         return Ok(());
     }
