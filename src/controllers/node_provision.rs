@@ -25,6 +25,7 @@ pub async fn reconcile(ctx: &ReconcileContext) {
         let Some(name) = node.metadata.name.as_deref() else {
             continue;
         };
+        let node_uid = node.metadata.uid.clone();
         let labels = node.metadata.labels.as_ref();
 
         // Skip nodes already bound to a server.
@@ -37,16 +38,89 @@ pub async fn reconcile(ctx: &ReconcileContext) {
             continue;
         }
 
-        // Need all three provision labels.
-        let Some(size) = labels.and_then(|l| l.get(LABEL_SIZE)) else {
+        // Skip nodes with none of the provision labels.
+        let has_any = labels.is_some_and(|l| {
+            l.contains_key(LABEL_SIZE)
+                || l.contains_key(LABEL_REGION)
+                || l.contains_key(LABEL_IMAGE)
+        });
+        if !has_any {
             continue;
-        };
-        let Some(region) = labels.and_then(|l| l.get(LABEL_REGION)) else {
+        }
+
+        let size = labels.and_then(|l| l.get(LABEL_SIZE));
+        let region = labels.and_then(|l| l.get(LABEL_REGION));
+        let image = labels.and_then(|l| l.get(LABEL_IMAGE));
+
+        // Validate all three required labels are present.
+        let mut missing = Vec::new();
+        if size.is_none() {
+            missing.push(LABEL_SIZE);
+        }
+        if region.is_none() {
+            missing.push(LABEL_REGION);
+        }
+        if image.is_none() {
+            missing.push(LABEL_IMAGE);
+        }
+        if !missing.is_empty() {
+            let msg = format!("missing required labels: {}", missing.join(", "));
+            set_provision_failed(&nodes_api, &ctx.k8s, name, node_uid, "InvalidConfig", &msg).await;
             continue;
-        };
-        let Some(image) = labels.and_then(|l| l.get(LABEL_IMAGE)) else {
-            continue;
-        };
+        }
+
+        let size = size.unwrap();
+        let region = region.unwrap();
+        let image = image.unwrap();
+
+        // Validate size slug against BinaryLane API.
+        match ctx.bl.list_sizes().await {
+            Ok(sizes) => {
+                if !sizes.iter().any(|s| s.slug == *size) {
+                    let msg = format!("size '{}' not found in BinaryLane", size);
+                    set_provision_failed(
+                        &nodes_api,
+                        &ctx.k8s,
+                        name,
+                        node_uid,
+                        "InvalidConfig",
+                        &msg,
+                    )
+                    .await;
+                    continue;
+                }
+            }
+            Err(e) => {
+                error!(error = %e, node = name, "node-provision: listing sizes for validation");
+                continue;
+            }
+        }
+
+        // Validate image slug against BinaryLane API.
+        match ctx.bl.list_images().await {
+            Ok(images) => {
+                if !images
+                    .iter()
+                    .any(|i| i.slug.as_deref() == Some(image.as_str()))
+                {
+                    let msg = format!("image '{}' not found in BinaryLane", image);
+                    set_provision_failed(
+                        &nodes_api,
+                        &ctx.k8s,
+                        name,
+                        node_uid,
+                        "InvalidConfig",
+                        &msg,
+                    )
+                    .await;
+                    continue;
+                }
+            }
+            Err(e) => {
+                error!(error = %e, node = name, "node-provision: listing images for validation");
+                continue;
+            }
+        }
 
         if let Err(e) = provision_node(
             ctx,
@@ -55,11 +129,91 @@ pub async fn reconcile(ctx: &ReconcileContext) {
             size.clone(),
             region.clone(),
             image.clone(),
+            node_uid,
         )
         .await
         {
             error!(error = %e, node = name, "node-provision: provisioning node");
         }
+    }
+}
+
+async fn set_provision_failed(
+    nodes_api: &Api<Node>,
+    k8s: &kube::Client,
+    name: &str,
+    node_uid: Option<String>,
+    reason: &str,
+    message: &str,
+) {
+    warn!(
+        node = name,
+        reason, message, "node-provision: validation failed"
+    );
+
+    let patch = serde_json::json!({
+        "status": {
+            "conditions": [{
+                "type": "ProvisionFailed",
+                "status": "True",
+                "reason": reason,
+                "message": message,
+                "lastTransitionTime": k8s_openapi::chrono::Utc::now().to_rfc3339(),
+            }]
+        }
+    });
+    if let Err(e) = nodes_api
+        .patch_status(
+            name,
+            &PatchParams::apply("binarylane-controller"),
+            &kube::api::Patch::Merge(&patch),
+        )
+        .await
+    {
+        warn!(node = name, error = %e, "failed to patch ProvisionFailed condition");
+    }
+
+    emit_event(k8s, name, node_uid, "Warning", "ProvisionFailed", message).await;
+}
+
+async fn emit_event(
+    k8s: &kube::Client,
+    node_name: &str,
+    node_uid: Option<String>,
+    event_type: &str,
+    reason: &str,
+    message: &str,
+) {
+    let events_api: Api<Event> = Api::namespaced(k8s.clone(), "default");
+    let now = Time(k8s_openapi::chrono::Utc::now());
+    let event = Event {
+        metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+            generate_name: Some("binarylane-controller-".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        involved_object: ObjectReference {
+            api_version: Some("v1".to_string()),
+            kind: Some("Node".to_string()),
+            name: Some(node_name.to_string()),
+            uid: node_uid,
+            ..Default::default()
+        },
+        reason: Some(reason.to_string()),
+        message: Some(message.to_string()),
+        type_: Some(event_type.to_string()),
+        source: Some(EventSource {
+            component: Some("binarylane-controller".to_string()),
+            ..Default::default()
+        }),
+        first_timestamp: Some(now.clone()),
+        last_timestamp: Some(now),
+        count: Some(1),
+        action: Some("Provision".to_string()),
+        ..Default::default()
+    };
+    if let Err(e) = events_api.create(&Default::default(), &event).await {
+        warn!(node = node_name, error = %e, reason, "failed to emit event");
     }
 }
 
@@ -70,6 +224,7 @@ async fn provision_node(
     size: String,
     region: String,
     image: String,
+    node_uid: Option<String>,
 ) -> Result<()> {
     let secrets_api: Api<Secret> = Api::namespaced(ctx.k8s.clone(), &ctx.secret_namespace);
 
@@ -97,9 +252,7 @@ async fn provision_node(
         .and_then(|d| d.get("user-data"))
         .map(|v| String::from_utf8_lossy(&v.0).to_string());
 
-    // Check for an existing server first to avoid creating duplicates on retry
-    // (e.g. if a previous reconcile created the server but crashed before
-    // patching the Node with the server-id label).
+    // Check for an existing server first to avoid creating duplicates on retry.
     let srv = if let Some(existing) = ctx
         .bl
         .get_server_by_hostname(name)
@@ -148,46 +301,18 @@ async fn provision_node(
         .await
         .context("patching node with provider ID")?;
 
-    // Emit a K8s Event on the Node so it's visible in `kubectl describe node`.
-    let events_api: Api<Event> = Api::namespaced(ctx.k8s.clone(), "default");
-    let node_uid = nodes_api
-        .get(name)
-        .await
-        .ok()
-        .and_then(|n| n.metadata.uid);
-    let now = Time(k8s_openapi::chrono::Utc::now());
-    let event = Event {
-        metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
-            generate_name: Some("binarylane-controller-".to_string()),
-            namespace: Some("default".to_string()),
-            ..Default::default()
-        },
-        involved_object: ObjectReference {
-            api_version: Some("v1".to_string()),
-            kind: Some("Node".to_string()),
-            name: Some(name.to_string()),
-            uid: node_uid,
-            ..Default::default()
-        },
-        reason: Some("ServerCreated".to_string()),
-        message: Some(format!(
+    emit_event(
+        &ctx.k8s,
+        name,
+        node_uid,
+        "Normal",
+        "ServerCreated",
+        &format!(
             "Created BinaryLane server {} ({}, {})",
             srv.id, srv.size_slug, srv.region.slug
-        )),
-        type_: Some("Normal".to_string()),
-        source: Some(EventSource {
-            component: Some("binarylane-controller".to_string()),
-            ..Default::default()
-        }),
-        first_timestamp: Some(now.clone()),
-        last_timestamp: Some(now),
-        count: Some(1),
-        action: Some("Provision".to_string()),
-        ..Default::default()
-    };
-    if let Err(e) = events_api.create(&Default::default(), &event).await {
-        warn!(node = name, error = %e, "failed to emit ServerCreated event");
-    }
+        ),
+    )
+    .await;
 
     info!(node = name, server_id = srv.id, "provisioned server");
     Ok(())
