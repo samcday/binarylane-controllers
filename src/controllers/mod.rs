@@ -41,6 +41,8 @@ const DEFAULT_CONTROLLERS: &[&str] = &[
     "node-bind",
     "node-provision",
     "service",
+    "autoscaler",
+    "dns-webhook",
 ];
 
 /// Resolve a controller spec string into the set of enabled controller names.
@@ -90,8 +92,8 @@ mod tests {
         assert!(set.contains("node-bind"));
         assert!(set.contains("node-provision"));
         assert!(set.contains("service"));
-        assert!(!set.contains("autoscaler"));
-        assert!(!set.contains("dns-webhook"));
+        assert!(set.contains("autoscaler"));
+        assert!(set.contains("dns-webhook"));
     }
 
     #[test]
@@ -102,7 +104,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_star_plus_optin() {
+    fn test_resolve_star_plus_explicit() {
         let set = resolve_controllers("*,autoscaler");
         assert!(set.contains("node-sync"));
         assert!(set.contains("autoscaler"));
