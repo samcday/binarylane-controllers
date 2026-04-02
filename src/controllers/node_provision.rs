@@ -229,8 +229,7 @@ pub async fn reconcile(ctx: &ReconcileContext) {
                 // (API timeouts, rate limits) should be retried on next cycle.
                 let msg = format!("server creation failed: {e:#}");
                 error!(error = %e, node = name, "node-provision: provisioning failed");
-                emit_event(&ctx.k8s, name, node_uid, "Warning", "ProvisionError", &msg)
-                    .await;
+                emit_event(&ctx.k8s, name, node_uid, "Warning", "ProvisionError", &msg).await;
             }
         }
     }
