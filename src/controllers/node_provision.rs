@@ -396,17 +396,45 @@ async fn provision_node(
 ) -> Result<()> {
     let secrets_api: Api<Secret> = Api::namespaced(ctx.k8s.clone(), &ctx.secret_namespace);
 
-    // Read password from secret.
+    // Read or generate password. If no secret exists, generate a password and
+    // persist it so it's not lost if server creation fails mid-flight.
     let password_secret_name = node_password_secret_name(name);
-    let password_secret = secrets_api
-        .get_opt(&password_secret_name)
-        .await
-        .context("getting password secret")?;
-    let password = password_secret
-        .as_ref()
-        .and_then(|s| s.data.as_ref())
-        .and_then(|d| d.get("password"))
-        .map(|v| String::from_utf8_lossy(&v.0).to_string());
+    let password = match secrets_api.get_opt(&password_secret_name).await {
+        Ok(Some(secret)) => secret
+            .data
+            .as_ref()
+            .and_then(|d| d.get("password"))
+            .map(|v| String::from_utf8_lossy(&v.0).to_string()),
+        _ => None,
+    };
+    let password = match password {
+        Some(p) => p,
+        None => {
+            let p = binarylane::generate_server_password();
+            let patch = serde_json::json!({
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": {
+                    "name": password_secret_name,
+                    "labels": {
+                        "app.kubernetes.io/managed-by": "binarylane-controller",
+                    },
+                },
+                "type": "Opaque",
+                "stringData": { "password": &p },
+            });
+            secrets_api
+                .patch(
+                    &password_secret_name,
+                    &PatchParams::apply("binarylane-controller").force(),
+                    &kube::api::Patch::Apply(&patch),
+                )
+                .await
+                .context("creating password secret")?;
+            info!(node = name, "generated password secret");
+            p
+        }
+    };
 
     // Read user-data from secret.
     let user_data_secret_name = user_data_secret_name(name);
@@ -443,7 +471,7 @@ async fn provision_node(
                 region,
                 user_data,
                 ssh_keys: None,
-                password,
+                password: Some(password),
             })
             .await
             .context("creating server")?
