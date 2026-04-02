@@ -45,7 +45,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: ${{ github.event.inputs.suite && fromJSON(format('["{0}"]', github.event.inputs.suite)) || fromJSON('["node-lb","autoscaler","external-dns"]') }}
+        suite: ${{ github.event.inputs.suite && fromJSON(format('["{0}"]', github.event.inputs.suite)) || fromJSON('["node_lb","autoscaler","external_dns"]') }}
     env:
       BL_API_TOKEN: ${{ secrets.BL_API_TOKEN }}
     steps:
@@ -57,12 +57,18 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
+      - name: Install crane
+        run: curl -sL https://github.com/google/go-containerregistry/releases/download/v0.20.3/go-containerregistry_Linux_x86_64.tar.gz | sudo tar xz -C /usr/local/bin crane
+
       - name: Install Tilt
         run: curl -fsSL https://raw.githubusercontent.com/tilt-dev/tilt/v0.33.22/scripts/install.sh | bash
 
       - name: Provision control plane
+        env:
+          SUITE: ${{ matrix.suite }}
         run: |
-          output="$(cargo xtask dev-up --server-name ci-${{ github.run_id }}-${{ matrix.suite }})"
+          server_name="ci-${{ github.run_id }}-${SUITE//_/-}"
+          output="$(cargo xtask dev-up --region bne --wait-timeout-secs 90 --server-name "$server_name" --ssh-key-name "binarylane-dev-key-$server_name")"
           eval "$output"
           # Persist exported env vars to GITHUB_ENV for subsequent steps.
           # dev-up emits lines like: export KEY='value'

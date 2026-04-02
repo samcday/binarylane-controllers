@@ -369,6 +369,7 @@ fn cmd_dev_up(args: DevUpArgs) -> Result<()> {
         &ssh_user,
         Some(&ssh_key_path),
         &args.known_hosts,
+        server.id,
         timeout,
     )?;
 
@@ -568,6 +569,10 @@ fn cmd_dev_down(args: DevDownArgs) -> Result<()> {
 }
 
 fn cmd_tilt(args: TiltArgs) -> Result<()> {
+    ensure_tool(
+        "crane",
+        "install crane: https://github.com/google/go-containerregistry/releases",
+    )?;
     ensure_tool("tilt", "install Tilt: https://docs.tilt.dev/install.html")?;
 
     let mut cmd = Command::new("tilt");
@@ -693,6 +698,7 @@ fn ensure_k3s_server(
     user: &str,
     ssh_key_path: Option<&Path>,
     known_hosts: &Path,
+    server_id: i64,
     timeout: Duration,
 ) -> Result<()> {
     eprintln!("Installing/verifying k3s control plane on {}...", host);
@@ -719,7 +725,7 @@ if ! command -v curl >/dev/null 2>&1; then\n\
   fi\n\
 fi\n\
 if ! command -v k3s >/dev/null 2>&1; then\n\
-  curl -sfL https://get.k3s.io | ${{SUDO}} env INSTALL_K3S_EXEC='server --write-kubeconfig-mode 644 --disable traefik --tls-san {host}' sh -s -\n\
+  curl -sfL https://get.k3s.io | ${{SUDO}} env INSTALL_K3S_EXEC='server --write-kubeconfig-mode 644 --disable traefik --disable servicelb --disable-cloud-controller --kubelet-arg=provider-id=binarylane:///{server_id} --tls-san {host}' sh -s -\n\
 fi\n\
 ${{SUDO}} systemctl enable --now k3s >/dev/null 2>&1 || true\n\
 ${{SUDO}} systemctl is-active --quiet k3s\n"

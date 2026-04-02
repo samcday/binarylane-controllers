@@ -8,6 +8,7 @@ use crate::binarylane::{self, Client as BlClient};
 const ANNOTATION_LB_ID: &str = "binarylane.com.au/load-balancer-id";
 const ANNOTATION_LB_REGION: &str = "binarylane.com.au/load-balancer-region";
 const FINALIZER: &str = "binarylane.com.au/load-balancer";
+const LB_CLASS: &str = "binarylane.com.au/load-balancer";
 
 pub async fn reconcile(bl: &BlClient, k8s: &KubeClient) {
     let svc_api: Api<Service> = Api::all(k8s.clone());
@@ -27,10 +28,15 @@ pub async fn reconcile(bl: &BlClient, k8s: &KubeClient) {
         if spec.type_.as_deref() != Some("LoadBalancer") {
             continue;
         }
+        // Only reconcile services with our loadBalancerClass or no class at all
+        match spec.load_balancer_class.as_deref() {
+            Some(LB_CLASS) | None => {}
+            Some(_) => continue,
+        }
         let ns = svc.metadata.namespace.as_deref().unwrap_or("default");
         let name = svc.metadata.name.as_deref().unwrap_or("");
         if let Err(e) = reconcile_service(bl, k8s, svc, ns, name).await {
-            error!(error = %e, service = %format!("{ns}/{name}"), "reconciling service");
+            error!(error = %format!("{e:#}"), service = %format!("{ns}/{name}"), "reconciling service");
         }
     }
 }
@@ -83,21 +89,33 @@ async fn reconcile_service(
     let rules: Vec<binarylane::ForwardingRule> = ports
         .iter()
         .map(|p| {
-            let proto = p.protocol.as_deref().unwrap_or("TCP").to_lowercase();
+            // BinaryLane LBs only support http/https protocols.
+            // Map K8s TCP ports to http (port 443 -> https).
+            let proto = match p.port {
+                443 => "https",
+                _ => "http",
+            };
             binarylane::ForwardingRule {
-                entry_protocol: proto.clone(),
+                entry_protocol: proto.to_string(),
                 entry_port: p.port,
-                target_protocol: proto,
+                target_protocol: proto.to_string(),
                 target_port: p.node_port.unwrap_or(p.port),
             }
         })
         .collect();
 
     let first_node_port = ports.first().and_then(|p| p.node_port).unwrap_or(80);
+    let has_http = rules.iter().any(|r| r.entry_protocol == "http");
+    let has_https = rules.iter().any(|r| r.entry_protocol == "https");
+    let hc_protocol = match (has_http, has_https) {
+        (true, true) => "both",
+        (_, true) => "https",
+        _ => "http",
+    };
     let health_check = binarylane::HealthCheck {
-        protocol: "tcp".to_string(),
+        protocol: hc_protocol.to_string(),
         port: first_node_port,
-        path: None,
+        path: Some("/".to_string()),
         check_interval_seconds: 10,
         response_timeout_seconds: 5,
         unhealthy_threshold: 3,
@@ -193,17 +211,32 @@ async fn create_load_balancer(
     health_check: binarylane::HealthCheck,
     node_ids: Vec<i64>,
 ) -> Result<()> {
-    info!(service = %format!("{ns}/{name}"), region, "creating load balancer");
-    let lb = bl
-        .create_load_balancer(binarylane::CreateLoadBalancerRequest {
-            name: lb_name(ns, name),
+    let desired_name = lb_name(ns, name);
+
+    // Check for existing LB by name (recover from prior create where the
+    // annotation write failed, avoiding duplicate LBs).
+    let existing = bl
+        .list_load_balancers()
+        .await
+        .context("listing load balancers")?
+        .into_iter()
+        .find(|lb| lb.name == desired_name);
+
+    let lb = if let Some(lb) = existing {
+        info!(service = %format!("{ns}/{name}"), id = lb.id, "adopting existing load balancer");
+        lb
+    } else {
+        info!(service = %format!("{ns}/{name}"), region, "creating load balancer");
+        bl.create_load_balancer(binarylane::CreateLoadBalancerRequest {
+            name: desired_name,
             region: region.to_string(),
             forwarding_rules: rules,
             health_check: Some(health_check),
             server_ids: node_ids,
         })
         .await
-        .context("creating load balancer")?;
+        .context("creating load balancer")?
+    };
 
     // Set LB ID annotation
     let patch = serde_json::json!({
