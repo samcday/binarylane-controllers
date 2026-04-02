@@ -36,7 +36,9 @@ async fn test_autoscaler_scale_up_down() -> Result<()> {
     match deploys.get("scale-test").await {
         Ok(_) => {}
         Err(kube::Error::Api(e)) if e.code == 404 => {
-            eprintln!("skipping: scale-test deployment not found (deploy full stack via Tilt first)");
+            eprintln!(
+                "skipping: scale-test deployment not found (deploy full stack via Tilt first)"
+            );
             return Ok(());
         }
         Err(e) => return Err(e.into()),

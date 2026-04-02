@@ -256,7 +256,10 @@ async fn run_lb_lifecycle(ctx: &TestContext, services: &Api<Service>, name: &str
         async move {
             let lb = bl.get_load_balancer(lb_id).await?;
             Ok(lb.is_some_and(|lb| {
-                let has_http = lb.forwarding_rules.iter().any(|r| r.entry_protocol == "http");
+                let has_http = lb
+                    .forwarding_rules
+                    .iter()
+                    .any(|r| r.entry_protocol == "http");
                 let has_https = lb
                     .forwarding_rules
                     .iter()
