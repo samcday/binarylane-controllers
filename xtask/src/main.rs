@@ -569,6 +569,10 @@ fn cmd_dev_down(args: DevDownArgs) -> Result<()> {
 }
 
 fn cmd_tilt(args: TiltArgs) -> Result<()> {
+    ensure_tool(
+        "crane",
+        "install crane: https://github.com/google/go-containerregistry/releases",
+    )?;
     ensure_tool("tilt", "install Tilt: https://docs.tilt.dev/install.html")?;
 
     let mut cmd = Command::new("tilt");

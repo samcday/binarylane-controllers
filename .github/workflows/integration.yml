@@ -41,7 +41,7 @@ jobs:
     needs: should-run
     if: needs.should-run.outputs.run == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -56,6 +56,9 @@ jobs:
 
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install crane
+        run: curl -sL https://github.com/google/go-containerregistry/releases/download/v0.20.3/go-containerregistry_Linux_x86_64.tar.gz | sudo tar xz -C /usr/local/bin crane
 
       - name: Install Tilt
         run: curl -fsSL https://raw.githubusercontent.com/tilt-dev/tilt/v0.33.22/scripts/install.sh | bash

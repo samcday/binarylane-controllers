@@ -22,13 +22,16 @@ if registry_image == "ghcr.io/samcday/binarylane-controller":
         "warning: BL_DEV_CONTROLLER_IMAGE is not set; using GHCR fallback. Run eval \"$(BL_API_TOKEN=$(cat ~/.bltoken) cargo xtask dev-up)\" for remote dev registry wiring."
     )
 
-# No live_update: the distroless runtime image has no tar/rm, which Tilt
-# needs for file sync. Full rebuild via the dep-cached Dockerfile is ~30s.
-docker_build(
+# Build natively + crane append (no Dockerfile). Fast for both dev
+# (incremental cargo build) and CI (cached cargo build).
+custom_build(
     registry_image,
-    ".",
-    dockerfile="Dockerfile",
-    only=["Cargo.toml", "Cargo.lock", "build.rs", "src/", "proto/", "binarylane-client/"],
+    'cargo build --release'
+    ' && tar cf /tmp/bl-controller-image.tar -C target/release binarylane-controller'
+    ' && crane append -b ubuntu:24.04'
+    ' -f /tmp/bl-controller-image.tar -t $EXPECTED_REF',
+    deps=["Cargo.toml", "Cargo.lock", "build.rs", "src/", "proto/", "binarylane-client/"],
+    skips_local_docker=True,
 )
 
 # Generate stable mTLS certs for dev. These persist in .dev/ and are only

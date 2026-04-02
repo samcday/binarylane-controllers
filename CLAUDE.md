@@ -21,6 +21,11 @@ cargo xtask dev-up                  # provision/reuse remote BinaryLane k3s cont
 cargo xtask dev-down                # tear down remote BinaryLane dev control plane
 ```
 
+Tilt is the unified dev + CI deployment tool. All deployment flows go through
+the Tiltfile — avoid creating separate CI deployment paths. Image builds use
+`crane append` (no Dockerfile) for speed; when arm64 is needed, add cross-rs
+and `crane index` for multi-arch manifests.
+
 ## Architecture
 
 ```
