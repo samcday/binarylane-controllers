@@ -119,7 +119,14 @@ async fn reconcile_service(
         let Some(existing) = existing else {
             warn!(lb_id, service = %format!("{ns}/{name}"), "load balancer not found, recreating");
             return create_load_balancer(
-                bl, &svc_api, ns, name, region, rules, health_check, node_ids,
+                bl,
+                &svc_api,
+                ns,
+                name,
+                region,
+                rules,
+                health_check,
+                node_ids,
             )
             .await;
         };
@@ -161,7 +168,17 @@ async fn reconcile_service(
         return update_service_status(&svc_api, name, &lb).await;
     }
 
-    create_load_balancer(bl, &svc_api, ns, name, region, rules, health_check, node_ids).await
+    create_load_balancer(
+        bl,
+        &svc_api,
+        ns,
+        name,
+        region,
+        rules,
+        health_check,
+        node_ids,
+    )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]

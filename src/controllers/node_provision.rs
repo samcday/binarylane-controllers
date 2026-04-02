@@ -1,13 +1,13 @@
 use anyhow::{Context, Result};
 use binarylane_client as binarylane;
 use k8s_openapi::api::core::v1::{Node, Secret};
-use kube::api::PatchParams;
 use kube::Api;
+use kube::api::PatchParams;
 use tracing::{error, info};
 
 use super::{
-    node_password_secret_name, user_data_secret_name, LABEL_IMAGE, LABEL_REGION, LABEL_SERVER_ID,
-    LABEL_SIZE, ReconcileContext,
+    LABEL_IMAGE, LABEL_REGION, LABEL_SERVER_ID, LABEL_SIZE, ReconcileContext,
+    node_password_secret_name, user_data_secret_name,
 };
 
 pub async fn reconcile(ctx: &ReconcileContext) {

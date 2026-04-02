@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result};
 use binarylane_client as binarylane;
 use k8s_openapi::api::core::v1::Node;
-use kube::api::PatchParams;
 use kube::Api;
+use kube::api::PatchParams;
 use tracing::{error, info};
 
 use super::{ReconcileContext, UNINITIALIZED_TAINT};

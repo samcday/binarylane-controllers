@@ -1,13 +1,11 @@
 use anyhow::{Context, Result};
 use binarylane_client as binarylane;
 use k8s_openapi::api::core::v1::{Node, Secret};
-use kube::api::PatchParams;
 use kube::Api;
+use kube::api::PatchParams;
 use tracing::{error, info};
 
-use super::{
-    node_password_secret_name, user_data_secret_name, ReconcileContext, FINALIZER,
-};
+use super::{FINALIZER, ReconcileContext, node_password_secret_name, user_data_secret_name};
 
 pub async fn reconcile(ctx: &ReconcileContext) {
     let nodes_api: Api<Node> = Api::all(ctx.k8s.clone());
@@ -32,9 +30,7 @@ pub async fn reconcile(ctx: &ReconcileContext) {
         let Some(server_id) = binarylane::parse_provider_id(provider_id) else {
             continue;
         };
-        if let Err(e) =
-            reconcile_node(ctx, &nodes_api, &secrets_api, node, name, server_id).await
-        {
+        if let Err(e) = reconcile_node(ctx, &nodes_api, &secrets_api, node, name, server_id).await {
             error!(error = %e, node = name, server_id, "node-deletion: reconciling node");
         }
     }
@@ -57,7 +53,10 @@ async fn reconcile_node(
     // Node is being deleted and has our finalizer: delete the BL server,
     // clean up secrets, then remove the finalizer so the node can be GC'd.
     if node.metadata.deletion_timestamp.is_some() && has_finalizer {
-        info!(node = name, server_id, "node deleted, deleting BinaryLane server");
+        info!(
+            node = name,
+            server_id, "node deleted, deleting BinaryLane server"
+        );
         ctx.bl
             .delete_server(server_id)
             .await
@@ -103,8 +102,7 @@ async fn reconcile_node(
 
     // Ensure finalizer is present.
     if !has_finalizer {
-        let mut finalizers: Vec<String> =
-            node.metadata.finalizers.clone().unwrap_or_default();
+        let mut finalizers: Vec<String> = node.metadata.finalizers.clone().unwrap_or_default();
         finalizers.push(FINALIZER.to_string());
         let patch = serde_json::json!({
             "metadata": { "finalizers": finalizers }
@@ -122,10 +120,14 @@ async fn reconcile_node(
     // Tether password secret to node via ownerReference (secret is created
     // before the node exists, so we set the ownerRef here on first reconciliation).
     if let Some(node_uid) = &node.metadata.uid {
-        tether_secret_to_node(secrets_api, &node_password_secret_name(name), name, node_uid)
-            .await;
-        tether_secret_to_node(secrets_api, &user_data_secret_name(name), name, node_uid)
-            .await;
+        tether_secret_to_node(
+            secrets_api,
+            &node_password_secret_name(name),
+            name,
+            node_uid,
+        )
+        .await;
+        tether_secret_to_node(secrets_api, &user_data_secret_name(name), name, node_uid).await;
     }
 
     Ok(())

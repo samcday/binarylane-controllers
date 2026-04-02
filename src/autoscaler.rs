@@ -364,18 +364,9 @@ impl proto::cloud_provider_server::CloudProvider for Provider {
 
             let mut labels = self.node_labels(&ng);
             labels.insert("kubernetes.io/hostname".to_string(), name.clone());
-            labels.insert(
-                controllers::LABEL_SIZE.to_string(),
-                ng.size.clone(),
-            );
-            labels.insert(
-                controllers::LABEL_REGION.to_string(),
-                ng.region.clone(),
-            );
-            labels.insert(
-                controllers::LABEL_IMAGE.to_string(),
-                ng.image.clone(),
-            );
+            labels.insert(controllers::LABEL_SIZE.to_string(), ng.size.clone());
+            labels.insert(controllers::LABEL_REGION.to_string(), ng.region.clone());
+            labels.insert(controllers::LABEL_IMAGE.to_string(), ng.image.clone());
 
             let node = K8sNode {
                 metadata: K8sObjectMeta {

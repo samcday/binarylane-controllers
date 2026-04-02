@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use binarylane_client as binarylane;
 use k8s_openapi::api::core::v1::Node;
-use kube::api::PatchParams;
 use kube::Api;
+use kube::api::PatchParams;
 use tracing::{error, info, warn};
 
 use super::{ANNOTATION_ADOPT, FINALIZER, LABEL_SERVER_ID, ReconcileContext};
@@ -48,11 +48,7 @@ pub async fn reconcile(ctx: &ReconcileContext) {
     }
 }
 
-async fn bind_node(
-    ctx: &ReconcileContext,
-    nodes_api: &Api<Node>,
-    name: &str,
-) -> Result<()> {
+async fn bind_node(ctx: &ReconcileContext, nodes_api: &Api<Node>, name: &str) -> Result<()> {
     let server = ctx
         .bl
         .get_server_by_hostname(name)
