@@ -1,3 +1,6 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
 use anyhow::{Context, Result};
 use binarylane_client as binarylane;
 use k8s_openapi::api::core::v1::{Event, EventSource, Node, ObjectReference, Secret};
@@ -10,6 +13,20 @@ use super::{
     LABEL_IMAGE, LABEL_REGION, LABEL_SERVER_ID, LABEL_SIZE, ReconcileContext,
     node_password_secret_name, user_data_secret_name,
 };
+
+const ANNOTATION_PROVISION_FAILED: &str = "bl.samcday.com/provision-failed-config";
+
+/// Hash the provision-relevant label values so we can detect config changes.
+fn config_hash(labels: Option<&std::collections::BTreeMap<String, String>>) -> String {
+    let mut h = DefaultHasher::new();
+    for key in [LABEL_SIZE, LABEL_REGION, LABEL_IMAGE] {
+        labels
+            .and_then(|l| l.get(key))
+            .unwrap_or(&String::new())
+            .hash(&mut h);
+    }
+    format!("{:x}", h.finish())
+}
 
 pub async fn reconcile(ctx: &ReconcileContext) {
     let nodes_api: Api<Node> = Api::all(ctx.k8s.clone());
@@ -48,6 +65,20 @@ pub async fn reconcile(ctx: &ReconcileContext) {
             continue;
         }
 
+        // Skip nodes whose config we've already validated and rejected.
+        // The annotation stores a hash of the provision labels at the time of
+        // failure. If labels change (user fixes config), the hash won't match.
+        let hash = config_hash(labels);
+        let already_failed = node
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|a| a.get(ANNOTATION_PROVISION_FAILED))
+            .is_some_and(|v| *v == hash);
+        if already_failed {
+            continue;
+        }
+
         let size = labels.and_then(|l| l.get(LABEL_SIZE));
         let region = labels.and_then(|l| l.get(LABEL_REGION));
         let image = labels.and_then(|l| l.get(LABEL_IMAGE));
@@ -65,7 +96,16 @@ pub async fn reconcile(ctx: &ReconcileContext) {
         }
         if !missing.is_empty() {
             let msg = format!("missing required labels: {}", missing.join(", "));
-            set_provision_failed(&nodes_api, &ctx.k8s, name, node_uid, "InvalidConfig", &msg).await;
+            set_provision_failed(
+                &nodes_api,
+                &ctx.k8s,
+                name,
+                node_uid,
+                &hash,
+                "InvalidConfig",
+                &msg,
+            )
+            .await;
             continue;
         }
 
@@ -83,6 +123,7 @@ pub async fn reconcile(ctx: &ReconcileContext) {
                         &ctx.k8s,
                         name,
                         node_uid,
+                        &hash,
                         "InvalidConfig",
                         &msg,
                     )
@@ -109,6 +150,7 @@ pub async fn reconcile(ctx: &ReconcileContext) {
                         &ctx.k8s,
                         name,
                         node_uid,
+                        &hash,
                         "InvalidConfig",
                         &msg,
                     )
@@ -143,6 +185,7 @@ async fn set_provision_failed(
     k8s: &kube::Client,
     name: &str,
     node_uid: Option<String>,
+    config_hash: &str,
     reason: &str,
     message: &str,
 ) {
@@ -150,6 +193,25 @@ async fn set_provision_failed(
         node = name,
         reason, message, "node-provision: validation failed"
     );
+
+    // Set the config hash annotation so we don't re-validate the same config.
+    let patch = serde_json::json!({
+        "metadata": {
+            "annotations": {
+                ANNOTATION_PROVISION_FAILED: config_hash,
+            }
+        }
+    });
+    if let Err(e) = nodes_api
+        .patch(
+            name,
+            &PatchParams::apply("binarylane-controller"),
+            &kube::api::Patch::Merge(&patch),
+        )
+        .await
+    {
+        warn!(node = name, error = %e, "failed to set provision-failed annotation");
+    }
 
     let patch = serde_json::json!({
         "status": {
