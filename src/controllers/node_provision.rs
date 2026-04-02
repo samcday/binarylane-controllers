@@ -66,8 +66,6 @@ pub async fn reconcile(ctx: &ReconcileContext) {
         }
 
         // Skip nodes whose config we've already validated and rejected.
-        // The annotation stores a hash of the provision labels at the time of
-        // failure. If labels change (user fixes config), the hash won't match.
         let hash = config_hash(labels);
         let already_failed = node
             .metadata
@@ -117,7 +115,15 @@ pub async fn reconcile(ctx: &ReconcileContext) {
         match ctx.bl.list_sizes().await {
             Ok(sizes) => {
                 if !sizes.iter().any(|s| s.slug == *size) {
-                    let msg = format!("size '{}' not found in BinaryLane", size);
+                    let msg = format!(
+                        "unknown size '{}' (available: {})",
+                        size,
+                        sizes
+                            .iter()
+                            .map(|s| s.slug.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
                     set_provision_failed(
                         &nodes_api,
                         &ctx.k8s,
@@ -137,6 +143,38 @@ pub async fn reconcile(ctx: &ReconcileContext) {
             }
         }
 
+        // Validate region slug against BinaryLane API.
+        match ctx.bl.list_regions().await {
+            Ok(regions) => {
+                if !regions.iter().any(|r| r.slug == *region) {
+                    let msg = format!(
+                        "unknown region '{}' (available: {})",
+                        region,
+                        regions
+                            .iter()
+                            .map(|r| r.slug.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                    set_provision_failed(
+                        &nodes_api,
+                        &ctx.k8s,
+                        name,
+                        node_uid,
+                        &hash,
+                        "InvalidConfig",
+                        &msg,
+                    )
+                    .await;
+                    continue;
+                }
+            }
+            Err(e) => {
+                error!(error = %e, node = name, "node-provision: listing regions for validation");
+                continue;
+            }
+        }
+
         // Validate image slug against BinaryLane API.
         match ctx.bl.list_images().await {
             Ok(images) => {
@@ -144,7 +182,15 @@ pub async fn reconcile(ctx: &ReconcileContext) {
                     .iter()
                     .any(|i| i.slug.as_deref() == Some(image.as_str()))
                 {
-                    let msg = format!("image '{}' not found in BinaryLane", image);
+                    let msg = format!(
+                        "unknown image '{}' (available: {})",
+                        image,
+                        images
+                            .iter()
+                            .filter_map(|i| i.slug.as_deref())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
                     set_provision_failed(
                         &nodes_api,
                         &ctx.k8s,
@@ -164,18 +210,35 @@ pub async fn reconcile(ctx: &ReconcileContext) {
             }
         }
 
-        if let Err(e) = provision_node(
+        match provision_node(
             ctx,
             &nodes_api,
             name,
             size.clone(),
             region.clone(),
             image.clone(),
-            node_uid,
+            node_uid.clone(),
         )
         .await
         {
-            error!(error = %e, node = name, "node-provision: provisioning node");
+            Ok(()) => {
+                // Clear the failed annotation and condition if they were set
+                // from a previous attempt (e.g. transient API error).
+                clear_provision_failed(&nodes_api, name).await;
+            }
+            Err(e) => {
+                let msg = format!("server creation failed: {e:#}");
+                set_provision_failed(
+                    &nodes_api,
+                    &ctx.k8s,
+                    name,
+                    node_uid,
+                    &hash,
+                    "ProvisionError",
+                    &msg,
+                )
+                .await;
+            }
         }
     }
 }
@@ -194,7 +257,6 @@ async fn set_provision_failed(
         reason, message, "node-provision: validation failed"
     );
 
-    // Set the config hash annotation so we don't re-validate the same config.
     let patch = serde_json::json!({
         "metadata": {
             "annotations": {
@@ -236,6 +298,50 @@ async fn set_provision_failed(
     }
 
     emit_event(k8s, name, node_uid, "Warning", "ProvisionFailed", message).await;
+}
+
+async fn clear_provision_failed(nodes_api: &Api<Node>, name: &str) {
+    // Remove the failed config annotation.
+    let patch = serde_json::json!({
+        "metadata": {
+            "annotations": {
+                ANNOTATION_PROVISION_FAILED: null,
+            }
+        }
+    });
+    if let Err(e) = nodes_api
+        .patch(
+            name,
+            &PatchParams::apply("binarylane-controller"),
+            &kube::api::Patch::Merge(&patch),
+        )
+        .await
+    {
+        warn!(node = name, error = %e, "failed to clear provision-failed annotation");
+    }
+
+    // Clear the ProvisionFailed condition.
+    let patch = serde_json::json!({
+        "status": {
+            "conditions": [{
+                "type": "ProvisionFailed",
+                "status": "False",
+                "reason": "Provisioned",
+                "message": "",
+                "lastTransitionTime": k8s_openapi::chrono::Utc::now().to_rfc3339(),
+            }]
+        }
+    });
+    if let Err(e) = nodes_api
+        .patch_status(
+            name,
+            &PatchParams::apply("binarylane-controller"),
+            &kube::api::Patch::Merge(&patch),
+        )
+        .await
+    {
+        warn!(node = name, error = %e, "failed to clear ProvisionFailed condition");
+    }
 }
 
 async fn emit_event(
