@@ -545,17 +545,6 @@ fn cmd_dev_up(mut args: DevUpArgs) -> Result<()> {
         t.elapsed().as_secs_f64()
     );
 
-    // Remove the uninitialized taint so pods can schedule before the cloud
-    // controller is running. The taint comes from --kubelet-arg=cloud-provider=external.
-    run_ssh_script(
-        &server_ip,
-        &ssh_user,
-        Some(&ssh_key_path),
-        &args.known_hosts,
-        "k3s kubectl taint nodes --all node.cloudprovider.kubernetes.io/uninitialized:NoSchedule- 2>/dev/null || true",
-        SshOutputMode::Capture,
-    )?;
-
     let registry_config = RegistryConfig {
         host: &registry_host,
         username: &registry_username,
@@ -1026,6 +1015,10 @@ spec:
       labels:
         app: registry
     spec:
+      tolerations:
+        - key: node.cloudprovider.kubernetes.io/uninitialized
+          effect: NoSchedule
+          operator: Exists
       containers:
         - name: registry
           image: registry:2
