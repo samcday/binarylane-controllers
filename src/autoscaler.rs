@@ -25,6 +25,7 @@ pub struct Provider {
     bl: binarylane::Client,
     store: Store<AutoScalingGroup>,
     secret_namespace: String,
+    size_cache: tokio::sync::Mutex<Option<Vec<binarylane::ListedSize>>>,
 }
 
 impl Provider {
@@ -39,6 +40,7 @@ impl Provider {
             bl,
             store,
             secret_namespace,
+            size_cache: tokio::sync::Mutex::new(None),
         }
     }
 
@@ -49,25 +51,34 @@ impl Provider {
             .find(|asg| asg.metadata.name.as_deref() == Some(id))
     }
 
+    async fn get_sizes(&self) -> Result<Vec<binarylane::ListedSize>, Status> {
+        let mut cache = self.size_cache.lock().await;
+        if let Some(sizes) = cache.as_ref() {
+            return Ok(sizes.clone());
+        }
+        let sizes = self
+            .bl
+            .list_sizes()
+            .await
+            .map_err(|e| Status::internal(format!("listing BinaryLane sizes: {e}")))?;
+        *cache = Some(sizes.clone());
+        Ok(sizes)
+    }
+
     /// Lists K8s nodes belonging to a node group, excluding those being deleted.
     async fn nodes_for_group(&self, asg: &AutoScalingGroup) -> Result<Vec<K8sNode>, Status> {
-        let prefix = format!(
-            "{}{}-",
-            asg.spec.name_prefix,
-            asg.metadata.name.as_deref().unwrap_or("")
-        );
+        let asg_name = asg.metadata.name.as_deref().unwrap_or("");
         let nodes_api: Api<K8sNode> = Api::all(self.k8s.clone());
+        let lp =
+            kube::api::ListParams::default().labels(&format!("blc.samcday.com/asg={asg_name}"));
         let node_list = nodes_api
-            .list(&Default::default())
+            .list(&lp)
             .await
             .map_err(|e| Status::internal(format!("listing nodes: {e}")))?;
         Ok(node_list
             .items
             .into_iter()
-            .filter(|n| {
-                let name = n.metadata.name.as_deref().unwrap_or("");
-                name.starts_with(&prefix) && n.metadata.deletion_timestamp.is_none()
-            })
+            .filter(|n| n.metadata.deletion_timestamp.is_none())
             .collect())
     }
 
@@ -97,43 +108,39 @@ impl Provider {
         secret_ref: &SecretRef,
         default_key: &str,
     ) -> Result<String, Status> {
-        let namespace = secret_ref
-            .namespace
-            .as_deref()
-            .unwrap_or(&self.secret_namespace);
         let key = secret_ref.key.as_deref().unwrap_or(default_key);
-        let secrets_api: Api<K8sSecret> = Api::namespaced(self.k8s.clone(), namespace);
+        let secrets_api: Api<K8sSecret> = Api::namespaced(self.k8s.clone(), &self.secret_namespace);
         let secret = secrets_api
             .get(&secret_ref.name)
             .await
             .map_err(|e| match e {
                 kube::Error::Api(err) if err.code == 404 => Status::not_found(format!(
                     "secret {}/{} not found",
-                    namespace, secret_ref.name
+                    self.secret_namespace, secret_ref.name
                 )),
                 other => Status::internal(format!(
                     "reading secret {}/{}: {other}",
-                    namespace, secret_ref.name
+                    self.secret_namespace, secret_ref.name
                 )),
             })?;
 
         let data = secret.data.ok_or_else(|| {
             Status::internal(format!(
                 "secret {}/{} has no data",
-                namespace, secret_ref.name
+                self.secret_namespace, secret_ref.name
             ))
         })?;
         let bytes = data.get(key).ok_or_else(|| {
             Status::internal(format!(
                 "secret {}/{} missing key {}",
-                namespace, secret_ref.name, key
+                self.secret_namespace, secret_ref.name, key
             ))
         })?;
 
         String::from_utf8(bytes.0.clone()).map_err(|e| {
             Status::internal(format!(
                 "secret {}/{} key {} is not valid UTF-8: {e}",
-                namespace, secret_ref.name, key
+                self.secret_namespace, secret_ref.name, key
             ))
         })
     }
@@ -150,37 +157,54 @@ impl Provider {
             .ok_or_else(|| Status::invalid_argument("asg missing metadata.name".to_string()))?;
         let secret_name = format!("{asg_name}-password");
         let secrets_api: Api<K8sSecret> = Api::namespaced(self.k8s.clone(), &self.secret_namespace);
-
-        if let Some(secret) = secrets_api.get_opt(&secret_name).await.map_err(|e| {
-            Status::internal(format!(
-                "reading secret {}/{}: {e}",
-                self.secret_namespace, secret_name
-            ))
-        })? {
-            let data = secret.data.ok_or_else(|| {
-                Status::internal(format!(
-                    "secret {}/{} has no data",
-                    self.secret_namespace, secret_name
-                ))
-            })?;
-            let bytes = data.get("password").ok_or_else(|| {
-                Status::internal(format!(
-                    "secret {}/{} missing key password",
-                    self.secret_namespace, secret_name
-                ))
-            })?;
-            return String::from_utf8(bytes.0.clone()).map_err(|e| {
-                Status::internal(format!(
-                    "secret {}/{} key password is not valid UTF-8: {e}",
-                    self.secret_namespace, secret_name
-                ))
-            });
-        }
-
         let password = binarylane::generate_server_password();
-        self.create_secret(&secret_name, "password", &password)
-            .await?;
-        Ok(password)
+        let secret = K8sSecret {
+            metadata: K8sObjectMeta {
+                name: Some(secret_name.clone()),
+                namespace: Some(self.secret_namespace.clone()),
+                labels: Some(BTreeMap::from([(
+                    "app.kubernetes.io/managed-by".to_string(),
+                    "binarylane-controller".to_string(),
+                )])),
+                ..Default::default()
+            },
+            string_data: Some(BTreeMap::from([("password".to_string(), password.clone())])),
+            ..Default::default()
+        };
+
+        match secrets_api.create(&Default::default(), &secret).await {
+            Ok(_) => Ok(password),
+            Err(kube::Error::Api(err)) if err.code == 409 => {
+                let existing = secrets_api.get(&secret_name).await.map_err(|e| {
+                    Status::internal(format!(
+                        "reading secret {}/{}: {e}",
+                        self.secret_namespace, secret_name
+                    ))
+                })?;
+                let data = existing.data.ok_or_else(|| {
+                    Status::internal(format!(
+                        "secret {}/{} has no data",
+                        self.secret_namespace, secret_name
+                    ))
+                })?;
+                let bytes = data.get("password").ok_or_else(|| {
+                    Status::internal(format!(
+                        "secret {}/{} missing key password",
+                        self.secret_namespace, secret_name
+                    ))
+                })?;
+                String::from_utf8(bytes.0.clone()).map_err(|e| {
+                    Status::internal(format!(
+                        "secret {}/{} key password is not valid UTF-8: {e}",
+                        self.secret_namespace, secret_name
+                    ))
+                })
+            }
+            Err(e) => Err(Status::internal(format!(
+                "creating secret {}/{}: {e}",
+                self.secret_namespace, secret_name
+            ))),
+        }
     }
 
     async fn patch_asg_status(
@@ -192,6 +216,7 @@ impl Provider {
         let patch = serde_json::json!({
             "apiVersion": "blc.samcday.com/v1alpha1",
             "kind": "AutoScalingGroup",
+            "metadata": { "name": name },
             "status": status,
         });
         asg_api
@@ -313,6 +338,13 @@ impl proto::cloud_provider_server::CloudProvider for Provider {
         _req: Request<proto::RefreshRequest>,
     ) -> Result<Response<proto::RefreshResponse>, Status> {
         let asgs = self.store.state();
+        {
+            let mut cache = self.size_cache.lock().await;
+            match self.bl.list_sizes().await {
+                Ok(sizes) => *cache = Some(sizes),
+                Err(e) => warn!(error = %e, "failed to refresh BinaryLane size cache"),
+            }
+        }
         let asg_api: Api<AutoScalingGroup> = Api::all(self.k8s.clone());
         for asg in &asgs {
             let count = self.nodes_for_group(asg).await?.len() as i32;
@@ -327,6 +359,7 @@ impl proto::cloud_provider_server::CloudProvider for Provider {
             let patch = serde_json::json!({
                 "apiVersion": "blc.samcday.com/v1alpha1",
                 "kind": "AutoScalingGroup",
+                "metadata": { "name": name },
                 "status": status,
             });
             if let Err(e) = asg_api
@@ -592,11 +625,7 @@ impl proto::cloud_provider_server::CloudProvider for Provider {
         {
             None
         } else {
-            let sizes = self
-                .bl
-                .list_sizes()
-                .await
-                .map_err(|e| Status::internal(format!("listing BinaryLane sizes: {e}")))?;
+            let sizes = self.get_sizes().await?;
             Some(
                 sizes
                     .into_iter()

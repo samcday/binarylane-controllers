@@ -93,7 +93,7 @@ pub struct CreateServerRequest {
     pub password: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ListedSize {
     pub slug: String,
     pub vcpus: i32,
