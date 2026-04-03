@@ -545,6 +545,17 @@ fn cmd_dev_up(mut args: DevUpArgs) -> Result<()> {
         t.elapsed().as_secs_f64()
     );
 
+    // Remove the uninitialized taint so pods can schedule before the cloud
+    // controller is running. The taint comes from --kubelet-arg=cloud-provider=external.
+    run_ssh_script(
+        &server_ip,
+        &ssh_user,
+        Some(&ssh_key_path),
+        &args.known_hosts,
+        "k3s kubectl taint nodes --all node.cloudprovider.kubernetes.io/uninitialized:NoSchedule- 2>/dev/null || true",
+        SshOutputMode::Capture,
+    )?;
+
     let registry_config = RegistryConfig {
         host: &registry_host,
         username: &registry_username,
@@ -934,7 +945,7 @@ if ! command -v curl >/dev/null 2>&1; then\n\
   fi\n\
 fi\n\
 if ! command -v k3s >/dev/null 2>&1; then\n\
-  curl -sfL https://get.k3s.io | ${{SUDO}} env INSTALL_K3S_EXEC='server --write-kubeconfig-mode 644 --disable traefik --disable-cloud-controller --tls-san {host}' sh -s -\n\
+  curl -sfL https://get.k3s.io | ${{SUDO}} env INSTALL_K3S_EXEC='server --write-kubeconfig-mode 644 --disable traefik --disable-cloud-controller --kubelet-arg=cloud-provider=external --tls-san {host}' sh -s -\n\
 elif [ \"$k3s_was_active\" -eq 1 ] && [ \"$registries_changed\" -eq 1 ]; then\n\
   ${{SUDO}} systemctl restart k3s\n\
 fi\n\
@@ -1101,6 +1112,7 @@ for ns in {registry_ns} default binarylane-system; do
     --dry-run=client -o yaml | ${{SUDO}} kubectl apply -f -
 done
 for ns in default; do
+  for _i in $(seq 1 60); do ${{SUDO}} kubectl -n "$ns" get serviceaccount default >/dev/null 2>&1 && break; sleep 1; done
   ${{SUDO}} kubectl -n "$ns" patch serviceaccount default --type='merge' -p={default_sa_patch} >/dev/null
 done
 ${{SUDO}} kubectl -n {registry_ns} rollout status deployment/registry --timeout=300s
