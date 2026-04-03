@@ -1,54 +1,49 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result as AnyResult};
 use binarylane_client as binarylane;
 use k8s_openapi::api::core::v1::Node;
-use kube::Api;
 use kube::api::PatchParams;
+use kube::runtime::controller::Action;
+use kube::{Api, ResourceExt};
+use std::sync::Arc;
 use tracing::{error, info, warn};
 
 use super::{ANNOTATION_ADOPT, LABEL_SERVER_ID, ReconcileContext};
 
-pub async fn reconcile(ctx: &ReconcileContext) {
-    let nodes_api: Api<Node> = Api::all(ctx.k8s.clone());
-    let nodes = match nodes_api.list(&Default::default()).await {
-        Ok(list) => list,
-        Err(e) => {
-            error!(error = %e, "node-bind: listing nodes");
-            return;
-        }
-    };
+pub async fn reconcile(
+    node: Arc<Node>,
+    ctx: Arc<ReconcileContext>,
+) -> std::result::Result<Action, super::Error> {
+    let name = node.name_any();
 
-    for node in &nodes {
-        let Some(name) = node.metadata.name.as_deref() else {
-            continue;
-        };
-
-        // Only process nodes with the adopt annotation.
-        let has_adopt = node
-            .metadata
-            .annotations
-            .as_ref()
-            .is_some_and(|a| a.contains_key(ANNOTATION_ADOPT));
-        if !has_adopt {
-            continue;
-        }
-
-        // Skip nodes already bound to a server.
-        let has_server_id = node
-            .metadata
-            .labels
-            .as_ref()
-            .is_some_and(|l| l.contains_key(LABEL_SERVER_ID));
-        if has_server_id {
-            continue;
-        }
-
-        if let Err(e) = bind_node(ctx, &nodes_api, name).await {
-            error!(error = %e, node = name, "node-bind: binding node");
-        }
+    let has_adopt = node
+        .metadata
+        .annotations
+        .as_ref()
+        .is_some_and(|a| a.contains_key(ANNOTATION_ADOPT));
+    if !has_adopt {
+        return Ok(Action::await_change());
     }
+
+    let has_server_id = node
+        .metadata
+        .labels
+        .as_ref()
+        .is_some_and(|l| l.contains_key(LABEL_SERVER_ID));
+    if has_server_id {
+        return Ok(Action::await_change());
+    }
+
+    if let Err(e) = bind_node(&ctx, &name).await {
+        error!(error = %e, node = %name, "node-bind: binding node");
+        return Err(e.into());
+    }
+
+    Ok(Action::await_change())
 }
 
-async fn bind_node(ctx: &ReconcileContext, nodes_api: &Api<Node>, name: &str) -> Result<()> {
+async fn bind_node(ctx: &ReconcileContext, name: &str) -> AnyResult<()> {
+    let nodes_api: Api<Node> = Api::all(ctx.k8s.clone());
+
     let server = ctx
         .bl
         .get_server_by_hostname(name)
