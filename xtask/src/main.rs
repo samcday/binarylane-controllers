@@ -1589,6 +1589,8 @@ fn write_dev_tilt_values(tilt_values_path: &Path) -> Result<()> {
   listenAddr: "0.0.0.0:8086"
 mtls:
   enabled: true
+secretNamespaces:
+  - default
 "#
     .to_string();
 
@@ -1621,7 +1623,7 @@ fn write_dev_resources(
 kind: Secret
 metadata:
   name: dev-cloud-init
-  namespace: binarylane-system
+  namespace: default
 type: Opaque
 stringData:
   user-data: |
@@ -1639,7 +1641,7 @@ spec:
   namePrefix: "bl-dev-"
   userDataSecretRef:
     name: dev-cloud-init
-    namespace: binarylane-system
+    namespace: default
     key: user-data
 "#,
         cloud_init = indent_block(&cloud_init, 4),
