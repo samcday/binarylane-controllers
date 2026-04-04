@@ -37,7 +37,7 @@ pub async fn reconcile(
     let name = svc.name_any();
 
     if let Err(e) = reconcile_service(&ctx.bl, &ctx.k8s, &svc, ns, &name).await {
-        error!(error = %e, service = %format!("{ns}/{name}"), "reconciling service");
+        error!(error = format_args!("{e:#}"), service = %format!("{ns}/{name}"), "reconciling service");
         return Err(e.into());
     }
 

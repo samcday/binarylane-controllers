@@ -34,7 +34,7 @@ pub async fn reconcile(
     }
 
     if let Err(e) = bind_node(&ctx, &name).await {
-        error!(error = %e, node = %name, "node-bind: binding node");
+        error!(error = format_args!("{e:#}"), node = %name, "node-bind: binding node");
         return Err(e.into());
     }
 

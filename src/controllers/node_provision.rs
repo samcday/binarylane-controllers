@@ -188,7 +188,7 @@ pub async fn reconcile(
     .await
     {
         let msg = format!("server creation failed: {e:#}");
-        error!(error = %e, node = %name, "node-provision: provisioning failed");
+        error!(error = format_args!("{e:#}"), node = %name, "node-provision: provisioning failed");
         emit_event(&ctx.k8s, &name, node_uid, "Warning", "ProvisionError", &msg).await;
         return Err(e.into());
     }

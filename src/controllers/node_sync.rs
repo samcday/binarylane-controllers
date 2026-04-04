@@ -32,7 +32,7 @@ pub async fn reconcile(
     };
 
     if let Err(e) = reconcile_node(&ctx, &node, &name, server_id).await {
-        error!(error = %e, node = %name, server_id, "node-sync: reconciling node");
+        error!(error = format_args!("{e:#}"), node = %name, server_id, "node-sync: reconciling node");
         return Err(e.into());
     }
 
