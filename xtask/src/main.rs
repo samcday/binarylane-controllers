@@ -1839,6 +1839,17 @@ fn yaml_escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+fn indent_block(value: &str, spaces: usize) -> String {
+    let prefix = " ".repeat(spaces);
+    let mut out = String::new();
+    for line in value.lines() {
+        out.push_str(&prefix);
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
 fn generate_registry_password() -> String {
     thread_rng()
         .sample_iter(Alphanumeric)
