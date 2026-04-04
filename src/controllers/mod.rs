@@ -205,4 +205,24 @@ mod tests {
         assert!(set.contains("node-sync"));
         assert!(set.contains("node-bind"));
     }
+
+    #[test]
+    fn test_secret_to_node_mapper() {
+        let make_secret = |name: &str| Secret {
+            metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let ref_ = secret_to_node_mapper(make_secret("worker-1-node-password")).unwrap();
+        assert_eq!(ref_.name, "worker-1");
+
+        let ref_ = secret_to_node_mapper(make_secret("worker-1-user-data")).unwrap();
+        assert_eq!(ref_.name, "worker-1");
+
+        assert!(secret_to_node_mapper(make_secret("unrelated-secret")).is_none());
+        assert!(secret_to_node_mapper(make_secret("node-password")).is_none());
+    }
 }
