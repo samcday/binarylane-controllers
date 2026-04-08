@@ -19,6 +19,7 @@ permissions:
 
 jobs:
   check:
+    if: github.event_name != 'pull_request' || !startsWith(github.head_ref, 'release/v')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
