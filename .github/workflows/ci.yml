@@ -47,3 +47,9 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --locked
+
+      - name: Check CRDs are up to date
+        run: |
+          cargo run -p xtask --locked -- gen-crds
+          git diff --exit-code charts/binarylane-controllers-crds/templates/ \
+            || { echo "::error::CRDs are out of date — run 'cargo xtask gen-crds' and commit"; exit 1; }

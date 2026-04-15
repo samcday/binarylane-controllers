@@ -74,9 +74,16 @@ if _rust_log:
     _helm_set.append("extraEnv[0].name=RUST_LOG")
     _helm_set.append("extraEnv[0].value=" + _rust_log)
 
+crds_manifests = helm(
+    "charts/binarylane-controllers-crds",
+    name="binarylane-controllers-crds",
+    namespace="binarylane-system",
+)
+k8s_yaml(crds_manifests)
+
 controller_manifests = helm(
-    "chart",
-    name="binarylane-controller",
+    "charts/binarylane-controllers",
+    name="binarylane-controllers",
     namespace="binarylane-system",
     set=_helm_set,
     values=["tilt-values.yaml", generated_values],

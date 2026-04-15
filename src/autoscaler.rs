@@ -17,8 +17,10 @@ use tracing::{info, warn};
 
 use crate::binarylane;
 use crate::controllers;
-use crate::crd::{AutoScalingGroup, AutoScalingGroupSpec, AutoScalingGroupStatus, SecretRef};
 use crate::proto;
+use binarylane_controller::crd::{
+    AutoScalingGroup, AutoScalingGroupSpec, AutoScalingGroupStatus, SecretRef,
+};
 
 pub struct Provider {
     k8s: kube::Client,

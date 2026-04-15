@@ -232,26 +232,33 @@ jobs:
 
       - uses: azure/setup-helm@v4
 
-      - name: Lint chart
-        run: helm lint chart/
+      - name: Lint charts
+        run: |
+          set -euo pipefail
+          for chart in charts/*/; do helm lint "$chart"; done
 
-      - name: Package chart
-        run: helm package chart/
+      - name: Package charts
+        run: |
+          set -euo pipefail
+          for chart in charts/*/; do helm package "$chart"; done
 
       - if: needs.gate.outputs.mode == 'tag'
-        name: Push chart to GHCR
+        name: Push charts to GHCR
         run: |
           set -euo pipefail
           helm registry login ghcr.io -u "${{ github.actor }}" -p "${{ secrets.GITHUB_TOKEN }}"
-          helm push binarylane-controller-${{ needs.gate.outputs.version }}.tgz oci://ghcr.io/${{ github.repository_owner }}/charts
+          for tgz in binarylane-controllers*.tgz; do
+            helm push "$tgz" oci://ghcr.io/${{ github.repository_owner }}/charts || \
+              echo "::warning::push of $tgz failed (likely already published — CRDs chart has independent versioning)"
+          done
 
       - if: needs.gate.outputs.mode == 'tag'
-        name: Upload chart to release
+        name: Upload charts to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.gate.outputs.tag }}
           token: ${{ secrets.RELEASE_GITHUB_TOKEN }}
-          files: binarylane-controller-${{ needs.gate.outputs.version }}.tgz
+          files: binarylane-controllers*.tgz
 
   publish-release:
     needs: [gate, release, docker-merge, helm]
