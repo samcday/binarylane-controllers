@@ -2,15 +2,15 @@ apiVersion: apps/v1
 kind: Deployment
 {{- $tlsEnabled := or (and .Values.autoscaler.enabled .Values.mtls.enabled) (and .Values.externalDns.enabled .Values.externalDns.mtls.enabled) }}
 metadata:
-  name: {{ include "binarylane-controller.fullname" . }}
+  name: {{ include "binarylane-controllers.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "binarylane-controller.labels" . | nindent 4 }}
+    {{- include "binarylane-controllers.labels" . | nindent 4 }}
 spec:
   replicas: 1
   selector:
     matchLabels:
-      {{- include "binarylane-controller.selectorLabels" . | nindent 6 }}
+      {{- include "binarylane-controllers.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       annotations:
@@ -21,7 +21,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       labels:
-        {{- include "binarylane-controller.selectorLabels" . | nindent 8 }}
+        {{- include "binarylane-controllers.selectorLabels" . | nindent 8 }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -30,7 +30,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "binarylane-controller.serviceAccountName" . }}
+      serviceAccountName: {{ include "binarylane-controllers.serviceAccountName" . }}
       containers:
         - name: controller
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
@@ -39,7 +39,7 @@ spec:
             - name: BL_API_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "binarylane-controller.secretName" . }}
+                  name: {{ include "binarylane-controllers.secretName" . }}
                   key: {{ .Values.existingSecretKey }}
             - name: CONTROLLERS
               value: {{ .Values.controllers | quote }}
@@ -78,12 +78,12 @@ spec:
           ports:
             {{- if .Values.autoscaler.enabled }}
             - name: autoscaler
-              containerPort: {{ include "binarylane-controller.port" .Values.autoscaler.listenAddr }}
+              containerPort: {{ include "binarylane-controllers.port" .Values.autoscaler.listenAddr }}
               protocol: TCP
             {{- end }}
             {{- if .Values.externalDns.enabled }}
             - name: external-dns
-              containerPort: {{ include "binarylane-controller.port" .Values.externalDns.listenAddr }}
+              containerPort: {{ include "binarylane-controllers.port" .Values.externalDns.listenAddr }}
               protocol: TCP
             {{- end }}
           {{- end }}
@@ -101,7 +101,7 @@ spec:
       volumes:
         - name: tls
           secret:
-            secretName: {{ include "binarylane-controller.fullname" . }}-mtls-server
+            secretName: {{ include "binarylane-controllers.fullname" . }}-mtls-server
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

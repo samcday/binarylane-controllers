@@ -41,7 +41,7 @@ src/autoscaler.rs                gRPC CloudProvider: creates Node + Secrets for 
 src/dns_webhook.rs               External-DNS webhook server
 proto/externalgrpc.proto         Cluster autoscaler external gRPC proto definition
 build.rs                         Compiles proto via tonic-build
-chart/                           Helm chart for deployment
+charts/                          Helm charts: binarylane-controllers (controller) + binarylane-controllers-crds (CRDs)
 xtask/                           Dev workflow automation (remote k3s dev control plane)
 binarylane-client/               REST client crate for BinaryLane v2 API
 ```

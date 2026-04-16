@@ -1,14 +1,14 @@
 {{/*
 Expand the name of the chart.
 */}}
-{{- define "binarylane-controller.name" -}}
+{{- define "binarylane-controllers.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
 Create a default fully qualified app name.
 */}}
-{{- define "binarylane-controller.fullname" -}}
+{{- define "binarylane-controllers.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- else }}
@@ -24,16 +24,16 @@ Create a default fully qualified app name.
 {{/*
 Extract port number from a listenAddr like "0.0.0.0:8086"
 */}}
-{{- define "binarylane-controller.port" -}}
+{{- define "binarylane-controllers.port" -}}
 {{- splitList ":" . | last | int -}}
 {{- end -}}
 
 {{/*
 Common labels
 */}}
-{{- define "binarylane-controller.labels" -}}
+{{- define "binarylane-controllers.labels" -}}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
-{{ include "binarylane-controller.selectorLabels" . }}
+{{ include "binarylane-controllers.selectorLabels" . }}
 app.kubernetes.io/version: {{ .Values.image.tag | default .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
@@ -41,17 +41,17 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{/*
 Selector labels
 */}}
-{{- define "binarylane-controller.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "binarylane-controller.name" . }}
+{{- define "binarylane-controllers.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "binarylane-controllers.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
 Service account name
 */}}
-{{- define "binarylane-controller.serviceAccountName" -}}
+{{- define "binarylane-controllers.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}
-{{- default (include "binarylane-controller.fullname" .) .Values.serviceAccount.name }}
+{{- default (include "binarylane-controllers.fullname" .) .Values.serviceAccount.name }}
 {{- else }}
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
@@ -60,10 +60,10 @@ Service account name
 {{/*
 Secret name for API token
 */}}
-{{- define "binarylane-controller.secretName" -}}
+{{- define "binarylane-controllers.secretName" -}}
 {{- if .Values.existingSecret }}
 {{- .Values.existingSecret }}
 {{- else }}
-{{- include "binarylane-controller.fullname" . }}
+{{- include "binarylane-controllers.fullname" . }}
 {{- end }}
 {{- end }}

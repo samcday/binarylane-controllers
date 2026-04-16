@@ -2,25 +2,25 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "binarylane-controller.fullname" . }}
+  name: {{ include "binarylane-controllers.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "binarylane-controller.labels" . | nindent 4 }}
+    {{- include "binarylane-controllers.labels" . | nindent 4 }}
 spec:
   type: {{ .Values.service.type }}
   ports:
     {{- if .Values.autoscaler.enabled }}
-    - port: {{ include "binarylane-controller.port" .Values.autoscaler.listenAddr }}
+    - port: {{ include "binarylane-controllers.port" .Values.autoscaler.listenAddr }}
       targetPort: autoscaler
       protocol: TCP
       name: autoscaler
     {{- end }}
     {{- if .Values.externalDns.enabled }}
-    - port: {{ include "binarylane-controller.port" .Values.externalDns.listenAddr }}
+    - port: {{ include "binarylane-controllers.port" .Values.externalDns.listenAddr }}
       targetPort: external-dns
       protocol: TCP
       name: external-dns
     {{- end }}
   selector:
-    {{- include "binarylane-controller.selectorLabels" . | nindent 4 }}
+    {{- include "binarylane-controllers.selectorLabels" . | nindent 4 }}
 {{- end }}

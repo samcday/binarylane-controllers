@@ -1,7 +1,7 @@
 mod autoscaler;
 use binarylane_client as binarylane;
+use binarylane_controller::crd;
 mod controllers;
-mod crd;
 mod dns_webhook;
 
 pub mod proto {
