@@ -63,6 +63,7 @@ binarylane-client/               REST client crate for BinaryLane v2 API
 |---|---|---|---|
 | `BL_API_TOKEN` | yes | | BinaryLane API token |
 | `CONTROLLERS` | no | `*` | Controller selection (comma-separated) |
+| `NAMESPACE` | no | `binarylane-system` | Target-cluster namespace for per-node Secrets |
 | `CONFIG_PATH` | no | `/etc/binarylane-controller/config.json` | Autoscaler node group config |
 | `CLOUD_INIT_PATH` | no | `/etc/binarylane-controller/cloud-init.sh` | Cloud-init template file |
 | `GRPC_LISTEN_ADDR` | no | `0.0.0.0:8086` | gRPC listen address |

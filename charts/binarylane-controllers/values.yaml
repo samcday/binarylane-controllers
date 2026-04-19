@@ -18,6 +18,12 @@ existingSecretKey: "BL_API_TOKEN"
 # Controllers: node-sync, node-deletion, node-bind, node-provision, service, autoscaler, dns-webhook
 controllers: "*"
 
+# Namespace in the target cluster where per-node Secrets (password, user-data)
+# are created/read. Defaults to the release namespace, which is correct when the
+# controller runs inside the cluster it manages. Set explicitly (e.g. "kube-system")
+# when the controller runs outside its target cluster via `--kubeconfig`.
+namespace: ""
+
 serviceAccount:
   create: true
   annotations: {}

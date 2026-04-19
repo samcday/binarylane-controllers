@@ -40,9 +40,12 @@ struct Args {
     #[arg(long, env = "CLUSTER_AUTOSCALER_SERVICE", default_value_t = false)]
     cluster_autoscaler_service: bool,
 
-    /// Namespace the controller runs in (for namespaced Secret reconciliation)
-    #[arg(long, env = "POD_NAMESPACE", default_value = "binarylane-system")]
-    pod_namespace: String,
+    /// Namespace in the target cluster where per-node Secrets (password, user-data)
+    /// are created/read. Usually matches the controller's own pod namespace, but must
+    /// be set explicitly when the controller runs outside the cluster it manages
+    /// (e.g. via `--kubeconfig` pointing at a remote control plane).
+    #[arg(long, env = "NAMESPACE", default_value = "binarylane-system")]
+    namespace: String,
 
     /// TLS certificate path (enables mTLS when all three TLS args are set)
     #[arg(long, env = "TLS_CERT_PATH")]
@@ -104,7 +107,7 @@ async fn main() -> Result<()> {
     let ctx = std::sync::Arc::new(controllers::ReconcileContext {
         bl: bl.clone(),
         k8s: k8s.clone(),
-        secret_namespace: args.pod_namespace.clone(),
+        secret_namespace: args.namespace.clone(),
         bl_catalog: tokio::sync::RwLock::new(None),
     });
 
@@ -322,7 +325,7 @@ async fn main() -> Result<()> {
         k8s.clone(),
         bl.clone(),
         asg_store,
-        args.pod_namespace.clone(),
+        args.namespace.clone(),
     );
     let svc = proto::cloud_provider_server::CloudProviderServer::new(provider);
 
