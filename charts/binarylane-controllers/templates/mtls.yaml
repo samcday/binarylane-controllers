@@ -7,11 +7,9 @@
 {{- $ca := dict -}}
 {{- $serverCert := dict -}}
 {{- if and $existingServer $existingServer.data }}
-{{- /* Reuse the existing CA cert. The CA private key is not stored, so buildCustomCert
-       receives ca.crt as both arguments. This works for reusing the CA identity but cannot
-       sign new client certs — if a client secret is manually deleted while the server secret
-       exists, delete the server secret too to force full cert regeneration. */ -}}
-{{- $ca = buildCustomCert (index $existingServer.data "ca.crt") (index $existingServer.data "ca.crt") -}}
+{{- /* Reuse existing cert material. The CA private key is intentionally not stored,
+       so missing client certs cannot be generated unless all mTLS secrets are removed. */ -}}
+{{- $ca = dict "Cert" (index $existingServer.data "ca.crt" | b64dec) "Key" "" -}}
 {{- $serverCert = dict "Cert" (index $existingServer.data "tls.crt" | b64dec) "Key" (index $existingServer.data "tls.key" | b64dec) -}}
 {{- else }}
 {{- $ca = genCA "binarylane-controller-ca" 3650 -}}
@@ -24,6 +22,9 @@
 {{- if and $existingClient $existingClient.data }}
 {{- $clientCert = dict "Cert" (index $existingClient.data "tls.crt" | b64dec) "Key" (index $existingClient.data "tls.key" | b64dec) -}}
 {{- else }}
+{{- if and $existingServer $existingServer.data }}
+{{- fail (printf "cannot generate %s because %s exists without a CA private key; delete both mTLS secrets to regenerate" .Values.mtls.clientSecretName $serverSecretName) -}}
+{{- end }}
 {{- $clientCert = genSignedCert "cluster-autoscaler" nil nil 3650 $ca -}}
 {{- end }}
 {{- end }}
@@ -32,6 +33,9 @@
 {{- if and $existingEdClient $existingEdClient.data }}
 {{- $externalDnsClientCert = dict "Cert" (index $existingEdClient.data "tls.crt" | b64dec) "Key" (index $existingEdClient.data "tls.key" | b64dec) -}}
 {{- else }}
+{{- if and $existingServer $existingServer.data }}
+{{- fail (printf "cannot generate %s because %s exists without a CA private key; delete both mTLS secrets to regenerate" .Values.externalDns.mtls.clientSecretName $serverSecretName) -}}
+{{- end }}
 {{- $externalDnsClientCert = genSignedCert "external-dns" nil nil 3650 $ca -}}
 {{- end }}
 {{- end }}
